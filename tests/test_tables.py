@@ -165,6 +165,35 @@ def test_plain_table_has_no_header():
     assert all(not r.is_header for r in table.rows)
 
 
+CENTERED_TABLE = r"""\begin{document}
+\begin{table}
+\centering
+\begin{tabular}{ll}a & b\\ c & d\\\end{tabular}
+\caption{A table}
+\end{table}
+\end{document}"""
+
+
+def test_centering_in_table_float_sets_center_align():
+    table = _table(CENTERED_TABLE)
+    assert table.align == "center"
+
+
+def test_plain_table_float_has_no_align():
+    table = _table(
+        r"\begin{document}\begin{table}"
+        r"\begin{tabular}{ll}a & b\\\end{tabular}\end{table}\end{document}"
+    )
+    assert table.align is None
+
+
+def test_backend_centers_table_with_jc():
+    root = document_root(convert_source(CENTERED_TABLE).docx)
+    jc = root.xpath("//w:tbl/w:tblPr/w:jc", namespaces=NS)
+    assert len(jc) == 1
+    assert jc[0].get(f"{{{NS['w']}}}val") == "center"
+
+
 def test_backend_emits_vmerge_restart_and_continue():
     root = document_root(convert_source(BOOKTABS).docx)
     vmerges = root.xpath("//w:vMerge", namespaces=NS)

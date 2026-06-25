@@ -60,18 +60,21 @@ def tag_cjk_runs(root: _Element, east_asia_font: str) -> None:
 
 
 def _run(
-    text: str, *, upright: bool = False, bold: bool = False, script: str | None = None
+    text: str, *, upright: bool = False, bold: bool = False,
+    script: str | None = None, text_mode: bool = False,
 ) -> _Element:
     r = el("m:r")
     if upright or bold or script:
         rpr = sub(r, "m:rPr")
-        if upright:
+        # m:nor only for genuine text mode (\text/...); upright *math* uses the
+        # "plain" style below, which keeps math spacing. CT_RPr order: nor, scr, sty.
+        if upright and text_mode:
             sub(rpr, "m:nor")
         if script:
             sub(rpr, "m:scr", **{"m:val": script})
         if bold:
             sub(rpr, "m:sty", **{"m:val": "b"})
-        elif script:
+        elif (upright and not text_mode) or script:
             sub(rpr, "m:sty", **{"m:val": "p"})
     t = sub(r, "m:t")
     t.text = text
@@ -89,7 +92,8 @@ def _emit(node: L.MNode) -> list[_Element]:
     if isinstance(node, L.Lit):
         if node.text == "":
             return []
-        return [_run(node.text, upright=node.upright, bold=node.bold, script=node.script)]
+        return [_run(node.text, upright=node.upright, bold=node.bold,
+                     script=node.script, text_mode=node.text_mode)]
     if isinstance(node, L.Row):
         out: list[_Element] = []
         for item in node.items:
@@ -376,6 +380,26 @@ def render_block_lines(latex: str, collapse_align: bool = True) -> list[_Element
     if collapse_align and any(_has_top_amp(line) for line in lines):
         return [_aligned_matrix(lines)]
     return [_omath(L.parse(_strip_align_markers(line).strip())) for line in lines]
+
+
+def render_block_segments(latex: str) -> list[list[list[_Element]]]:
+    """Per ``\\\\``-line, the rendered OMML elements split at top-level ``&``.
+
+    Returns ``lines -> segments -> elements``. The writer uses this to build a
+    numbered ``m:eqArr`` where each line is one row and the ``&`` alignment
+    points become ``m:aln`` marks, so the relation signs line up while each line
+    still carries its own equation number.
+    """
+    cleaned = _LABEL_RE.sub("", latex).strip()
+    lines = [s.strip() for s in _split_top_level(cleaned, "\\\\")]
+    lines = [line for line in lines if line]
+    if not lines:
+        raise MathUnsupported("empty", "no math content")
+    out: list[list[list[_Element]]] = []
+    for line in lines:
+        segments = [s.strip() for s in _split_top_level(line, "&")]
+        out.append([_emit(L.parse(seg)) if seg else [] for seg in segments])
+    return out
 
 
 # Back-compat alias used by the package __init__.

@@ -139,6 +139,7 @@ _TEXT_SYMBOLS = {
     "textdegree": "°", "textbullet": "•", "textmu": "µ", "textperthousand": "‰",
     "textquotedblleft": "“", "textquotedblright": "”",
     "textquoteleft": "‘", "textquoteright": "’",
+    "textquotesingle": "'",  # straight typewriter apostrophe (U+0027)
     "guillemotleft": "«", "guillemotright": "»", "textsection": "§",
     "textparagraph": "¶",
     # vulgar fractions, currencies, and assorted text symbols
@@ -230,6 +231,7 @@ _IGNORE_MACROS = {
     "graphicspath", "definecolor", "pagenumbering",
     "renewcommand", "newcommand", "providecommand",
     "setitemize", "setenumerate", "hyphenation", "settopmatter",
+    "texwordstyle",  # tex2word style-binding directive: scanned separately, no output
     # grouping / layout / counter declarations -> drop (args consumed by specs)
     "begingroup", "endgroup", "bgroup", "egroup",
     "AddToShipoutPicture", "ClearShipoutPicture",
@@ -459,7 +461,7 @@ class _Builder:
         if isinstance(node, LatexCharsNode):
             text = _normalize_ws(node.chars)
             if text:
-                out.append(ir.Text(text))
+                out.extend(_typed_quote_runs(text))
             return
         if isinstance(node, LatexCommentNode):
             return
@@ -481,10 +483,14 @@ class _Builder:
         spec = node.specials_chars
         if spec == "~":
             out.append(ir.Text(" "))
-        elif spec in ("``", "''"):
-            out.append(ir.Text('"'))
-        elif spec in ("`", "'"):
-            out.append(ir.Text("'"))
+        elif spec == "``":
+            out.append(ir.Text("“"))  # LaTeX-command quote: curly, but English font
+        elif spec == "''":
+            out.append(ir.Text("”"))
+        elif spec == "`":
+            out.append(ir.Text("‘"))
+        elif spec == "'":
+            out.append(ir.Text("’"))
         elif spec in ("--", "---"):
             out.append(ir.Text("–" if spec == "--" else "—"))
         # otherwise ignore
@@ -812,7 +818,7 @@ class _Builder:
             if any(not (isinstance(x, ir.Text) and not x.value.strip()) for x in inline_buf):
                 cleaned = _clean_inlines(inline_buf.copy(), trim=True)
                 if cleaned:
-                    out.append(ir.Paragraph(cleaned))
+                    _flush_cleaned(cleaned, out)
             inline_buf.clear()
 
         for node in nodes:
@@ -822,10 +828,21 @@ class _Builder:
             if isinstance(node, LatexCommentNode):
                 continue
             if isinstance(node, LatexMathNode) and _is_display(node):
-                flush()
-                out.append(self._math_block(node.latex_verbatim(), "displaymath", False))
+                # buffer as an inline display equation; flush() decides whether it
+                # stays with surrounding text or degrades to a standalone block.
+                inline_buf.append(
+                    self._display_math(node.latex_verbatim(), "displaymath", False)
+                )
                 continue
             if isinstance(node, LatexEnvironmentNode):
+                base = node.environmentname.rstrip("*")
+                if base in _MATH_ENVS:
+                    starred = node.environmentname.endswith("*")
+                    numbered = (base not in _UNNUMBERED_MATH_ENVS) and not starred
+                    inline_buf.append(
+                        self._display_math(_verbatim_inner(node), base, numbered)
+                    )
+                    continue
                 flush()
                 self._environment(node, out)
                 continue
@@ -963,7 +980,7 @@ class _Builder:
                 flush()
             text = _normalize_ws(part)
             if text:
-                buf.append(ir.Text(text))
+                buf.extend(_typed_quote_runs(text))
 
     def _meta_macro(self, node: LatexMacroNode) -> None:
         if node.macroname == "author":
@@ -1035,9 +1052,18 @@ class _Builder:
         self._labelable = block
         return block
 
+    def _display_math(self, verbatim: str, env: str, numbered: bool) -> ir.DisplayMath:
+        """A display equation buffered as an inline (see :func:`_flush_cleaned`)."""
+        latex = _strip_math_delims(verbatim, env)
+        label = _extract_label(latex) if "\\label" in latex else None
+        latex = _LABEL_TAG_RE.sub("", latex).strip()
+        node = ir.DisplayMath(latex=latex, numbered=numbered, env=env, label=label)
+        self._labelable = node
+        return node
+
     _labelable: (
-        ir.Heading | ir.MathBlock | ir.Figure | ir.Table | ir.Theorem
-        | ir.Algorithm | ir.ListItem | None
+        ir.Heading | ir.MathBlock | ir.DisplayMath | ir.Figure | ir.Table
+        | ir.Theorem | ir.Algorithm | ir.ListItem | None
     ) = None
 
     def _environment(self, node: LatexEnvironmentNode, out: list[ir.Block]) -> None:  # noqa: C901
@@ -1059,10 +1085,7 @@ class _Builder:
         if base in ("table", "wraptable"):
             self._table_float(node, out, spanning=starred)
             return
-        if base in (
-            "tabular", "array", "tabularx", "tabulary", "longtable",
-            "supertabular", "xtabular", "mpsupertabular",
-        ):
+        if base in _TABULAR_ENVS:
             out.append(self._tabular(node))
             return
         if base in (
@@ -1273,6 +1296,8 @@ class _Builder:
                 elif child.macroname == "caption":
                     fig.caption = self.inlines(_group_nodes(child))
                     fig.caption_numbered = not _has_star(child)
+                    # caption before any graphic/subfigure -> render above the image
+                    fig.caption_above = fig.image is None and not fig.subfigures
                 elif child.macroname == "label" and fig.label is None:
                     fig.label = _chars_of(_group_nodes(child))
 
@@ -1283,6 +1308,8 @@ class _Builder:
                 sub.image = _make_image(child)
             elif child.macroname == "caption":
                 sub.caption = self.inlines(_group_nodes(child))
+                # caption before the graphic -> render above the image
+                sub.caption_above = sub.image is None
             elif child.macroname == "label":
                 sub.label = _chars_of(_group_nodes(child))
         return sub
@@ -1314,15 +1341,27 @@ class _Builder:
         # grid of sub-tables) survive instead of being dumped as raw LaTeX.
         caption: list[ir.Inline] | None = None
         caption_numbered = True
+        caption_above = False
+        seen_tabular = False
         label: str | None = None
+        align: ir.TableAlign | None = None
         content: list = []
         for child in node.nodelist:
             if isinstance(child, LatexMacroNode) and child.macroname == "caption":
                 caption = self.inlines(_group_nodes(child))
                 caption_numbered = not _has_star(child)
+                # caption before the table body -> render above the table
+                caption_above = not seen_tabular
             elif isinstance(child, LatexMacroNode) and child.macroname == "label":
                 label = _chars_of(_group_nodes(child))
+            elif (isinstance(child, LatexMacroNode)
+                  and child.macroname in _FLOAT_ALIGN_MACROS):
+                # \centering/\raggedright/\raggedleft inside the float aligns the
+                # table body horizontally on the page.
+                align = _FLOAT_ALIGN_MACROS[child.macroname]
             else:
+                if not seen_tabular and _subtree_has_tabular(child):
+                    seen_tabular = True
                 content.append(child)
         sub_blocks = self.blocks(content)
         tables = [b for b in sub_blocks if isinstance(b, ir.Table)]
@@ -1334,8 +1373,13 @@ class _Builder:
         # single-tabular float behaves exactly as before.
         tables[0].caption = caption
         tables[0].caption_numbered = caption_numbered
+        tables[0].caption_above = caption_above
         tables[0].label = label
         tables[0].spanning = spanning
+        # a float-level \centering aligns every tabular it contains
+        if align is not None:
+            for table in tables:
+                table.align = align
         self._labelable = tables[0]
         out.extend(sub_blocks)
 
@@ -1343,8 +1387,10 @@ class _Builder:
         # column spec is the first mandatory group argument of the environment
         colspec, colwidths = _parse_colspec(_env_colspec(node))
         booktabs = "\\toprule" in node.latex_verbatim() or "\\midrule" in node.latex_verbatim()
+        three_line = _first_command_is_toprule(node.nodelist)
         rows = self._tabular_rows(node.nodelist, len(colspec) or 1, colspec)
-        return ir.Table(rows=rows, colspec=colspec, booktabs=booktabs, colwidths=colwidths)
+        return ir.Table(rows=rows, colspec=colspec, booktabs=booktabs,
+                        three_line=three_line, colwidths=colwidths)
 
     def _tabular_rows(self, nodes: list, ncols: int, colspec: list) -> list[ir.TableRow]:
         rows: list[ir.TableRow] = []
@@ -1511,10 +1557,55 @@ def _walk_macros(nodes: list):
 # --------------------------------------------------------------------------- #
 
 
+# CJK codepoints: a line break (single newline) between two such characters
+# must not leave a space, matching xeCJK behaviour. Covers unified ideographs
+# (+ ext A), compatibility ideographs, kana, Hangul, and CJK/fullwidth symbols.
+_CJK_CHAR = (
+    "⺀-⻿"   # CJK radicals supplement
+    "　-〿"   # CJK symbols & punctuation
+    "぀-ヿ"   # hiragana + katakana
+    "㐀-䶿"   # CJK ext A
+    "一-鿿"   # CJK unified ideographs
+    "가-힯"   # Hangul syllables
+    "豈-﫿"   # CJK compatibility ideographs
+    "＀-￯"   # halfwidth & fullwidth forms
+)
+_CJK_GAP = re.compile("(?<=[" + _CJK_CHAR + "]) (?=[" + _CJK_CHAR + "])")
+
+
+# Directly-typed CJK-style curly quotes. Split off into their own ``ir.Text``
+# (tagged ``cjk_quote``) so the back-end can give them an East-Asian font hint in
+# a Chinese document -- LaTeX-command quotes stay untagged (English font).
+_TYPED_QUOTES = "“”‘’"  # “ ” ‘ ’
+# LaTeX single-quote syntax delivered as plain chars (the double ``/'' forms are
+# specials handled in _inline_special): ` -> ‘ and ' -> ’. These are a LaTeX
+# command, so they render curly but keep the default (Latin) font -> untagged.
+_ASCII_QUOTE_MAP = {"`": "‘", "'": "’"}
+
+
+def _typed_quote_runs(text: str) -> list[ir.Text]:
+    runs: list[ir.Text] = []
+    buf: list[str] = []
+    for ch in text:
+        if ch in _TYPED_QUOTES:
+            if buf:
+                runs.append(ir.Text("".join(buf)))
+                buf = []
+            runs.append(ir.Text(ch, cjk_quote=True))
+        else:
+            # ``/'' singles -> curly but English (stay in the untagged buffer).
+            buf.append(_ASCII_QUOTE_MAP.get(ch, ch))
+    if buf:
+        runs.append(ir.Text("".join(buf)))
+    return runs
+
+
 def _normalize_ws(text: str) -> str:
     if not text:
         return ""
-    return re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    # Drop the space left where a newline joined two CJK characters.
+    return _CJK_GAP.sub("", text)
 
 
 # Punctuation that should not be preceded by a space (e.g. a space inserted by
@@ -1532,8 +1623,9 @@ def _clean_inlines(nodes: list[ir.Inline], *, trim: bool = False) -> list[ir.Inl
     """
     merged: list[ir.Inline] = []
     for node in nodes:
-        if isinstance(node, ir.Text) and merged and isinstance(merged[-1], ir.Text):
-            merged[-1] = ir.Text(merged[-1].value + node.value)
+        if (isinstance(node, ir.Text) and merged and isinstance(merged[-1], ir.Text)
+                and merged[-1].cjk_quote == node.cjk_quote):
+            merged[-1] = ir.Text(merged[-1].value + node.value, cjk_quote=node.cjk_quote)
         else:
             merged.append(node)
     for node in merged:
@@ -1547,6 +1639,54 @@ def _clean_inlines(nodes: list[ir.Inline], *, trim: bool = False) -> list[ir.Inl
             merged[-1].value = merged[-1].value.rstrip()
         merged = [n for n in merged if not (isinstance(n, ir.Text) and n.value == "")]
     return merged
+
+
+def _flush_cleaned(cleaned: list[ir.Inline], out: list[ir.Block]) -> None:
+    """Emit a finished paragraph's inlines as one or more blocks.
+
+    A paragraph that carries a display equation *alongside* text becomes a single
+    :class:`ir.Paragraph` -- the back-end keeps the equation in the same Word
+    paragraph, joined to the text by soft line breaks. A paragraph whose only real
+    content is display math degrades back to standalone :class:`ir.MathBlock`s, so
+    an isolated equation (blank line on both sides) renders exactly as before.
+    """
+    if not any(isinstance(x, ir.DisplayMath) for x in cleaned):
+        out.append(ir.Paragraph(cleaned))
+        return
+    # only keep the equation inline with its paragraph when genuine prose text
+    # surrounds it (the "说明文字" case); otherwise an equation flanked solely by
+    # other inlines (e.g. inline math) keeps the historical block split.
+    has_prose = any(isinstance(x, ir.Text) and x.value.strip() for x in cleaned)
+    if has_prose:
+        out.append(ir.Paragraph(_trim_around_display_math(cleaned)))
+        return
+    group: list[ir.Inline] = []
+    for x in cleaned:
+        if isinstance(x, ir.DisplayMath):
+            if any(not (isinstance(g, ir.Text) and not g.value.strip()) for g in group):
+                out.append(ir.Paragraph(group))
+            group = []
+            out.append(x.to_block())
+        else:
+            group.append(x)
+    if any(not (isinstance(g, ir.Text) and not g.value.strip()) for g in group):
+        out.append(ir.Paragraph(group))
+
+
+def _trim_around_display_math(inlines: list[ir.Inline]) -> list[ir.Inline]:
+    """Drop the whitespace a line break left between text and a display equation.
+
+    The newline that separated the explanatory text from the equation in the
+    source collapses to a space; with the equation now joined by a soft break the
+    space is redundant, so trim text touching a :class:`ir.DisplayMath`."""
+    for i, node in enumerate(inlines):
+        if not isinstance(node, ir.DisplayMath):
+            continue
+        if i > 0 and isinstance(inlines[i - 1], ir.Text):
+            inlines[i - 1].value = inlines[i - 1].value.rstrip()
+        if i + 1 < len(inlines) and isinstance(inlines[i + 1], ir.Text):
+            inlines[i + 1].value = inlines[i + 1].value.lstrip()
+    return [n for n in inlines if not (isinstance(n, ir.Text) and n.value == "")]
 
 
 def _is_display(node: LatexMathNode) -> bool:
@@ -1596,6 +1736,21 @@ def _env_colspec(node: LatexEnvironmentNode) -> str:
 _CMIDRULE_RE = re.compile(r"(\d+)\s*-\s*(\d+)")
 
 
+def _first_command_is_toprule(nodes: list) -> bool:
+    """Whether the first non-blank command inside a tabular body is ``\\toprule``.
+
+    Marks a booktabs three-line table (三线表): leading whitespace/comments are
+    skipped and the first macro encountered must be ``\\toprule``.
+    """
+    for child in nodes:
+        if isinstance(child, LatexCommentNode):
+            continue
+        if isinstance(child, LatexCharsNode) and not child.chars.strip():
+            continue
+        return isinstance(child, LatexMacroNode) and child.macroname == "toprule"
+    return False
+
+
 def _cmidrule_range(node: LatexMacroNode) -> tuple[int, int] | None:
     """The 1-based ``{a-b}`` column range of a ``\\cmidrule``/``\\cline``.
 
@@ -1635,6 +1790,11 @@ def _braced_group(spec: str, start: int) -> tuple[str, int]:
 
 
 _COL_PROCESSOR_ALIGN = {
+    "centering": "center", "raggedright": "left", "raggedleft": "right",
+}
+
+#: Float-level alignment declarations (\centering etc.) inside a table/figure.
+_FLOAT_ALIGN_MACROS = {
     "centering": "center", "raggedright": "left", "raggedleft": "right",
 }
 
@@ -1695,6 +1855,33 @@ def _length_to_emu(value: str) -> float | None:
     if unit not in _UNIT_EMU:
         return None
     return num * _UNIT_EMU[unit]
+
+
+#: Environment names that hold a table body (used to place a float's caption).
+_TABULAR_ENVS = frozenset({
+    "tabular", "array", "tabularx", "tabulary", "longtable",
+    "supertabular", "xtabular", "mpsupertabular",
+})
+
+
+def _subtree_has_tabular(node) -> bool:
+    """True if *node* is, or contains anywhere below it, a tabular environment.
+
+    Used to tell whether a table float's body precedes its ``\\caption`` (it may
+    be wrapped in ``\\resizebox``/``\\centering``/minipage), so the caption is
+    placed above only when ``\\caption`` truly comes first in the source.
+    """
+    if isinstance(node, LatexEnvironmentNode):
+        if node.environmentname.rstrip("*") in _TABULAR_ENVS:
+            return True
+        return any(_subtree_has_tabular(c) for c in node.nodelist)
+    children = getattr(node, "nodelist", None)
+    if children is not None:
+        return any(_subtree_has_tabular(c) for c in children)
+    argd = getattr(node, "nodeargd", None)
+    if argd is not None and getattr(argd, "argnlist", None):
+        return any(a is not None and _subtree_has_tabular(a) for a in argd.argnlist)
+    return False
 
 
 def _parse_graphics_options(opts: str) -> dict[str, str]:
@@ -1895,6 +2082,8 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             # layout / front-matter commands: consume their args so they don't
             # leak as text (e.g. full-page cover \AddToShipoutPicture{\put...}).
             MacroSpec("AddToShipoutPicture", "*{"),
+            # tex2word-only: bind a logical role to a Word style (consume 2 args).
+            MacroSpec("texwordstyle", "{{"),
             MacroSpec("newcounter", "{["),
             MacroSpec("addtocounter", "{{"),
             MacroSpec("refstepcounter", "{"),
@@ -2298,6 +2487,10 @@ def parse_document(
         doc.meta.language = _detect_language(preamble)  # babel/polyglossia -> BCP-47
     _detect_fonts(doc, preamble)  # fontspec/xeCJK \setmainfont / \setCJK*font
     doc.meta.columns = _detect_columns(expanded)  # twocolumn / \twocolumn / multicols
+    # scan the raw source: a user's \providecommand{\texwordstyle}[2]{} (added so
+    # pdflatex ignores it) would otherwise expand the directive away before we see it.
+    _detect_style_overrides(doc, source)  # \texwordstyle{role}{Word style name}
+    _detect_caption_overrides(doc, source)  # \texwordcaption{key}{value}
     _resolve_bibliography(doc, builder, base_dir, report, csl_path)
     return doc, report
 
@@ -2343,6 +2536,76 @@ def _detect_fonts(doc: ir.Document, preamble: str) -> None:
         doc.meta.cjk_mono_font = cjk_mono
 
 
+#: logical roles a \texwordstyle directive may bind to a Word style.
+_STYLE_OVERRIDE_ROLES = {
+    "appendix1", "appendix2", "appendix3", "appendix4", "part",
+    "figure",   # the paragraph that holds an inserted image
+    "caption",  # default for every caption when no per-type role is set
+    "figurecaption", "tablecaption", "subfigurecaption", "algorithmcaption",
+    # generic paragraph styles: bind, else auto-discover by name, else built-in
+    "title", "subtitle", "abstract", "sourcecode", "quote", "bibliography",
+    "footnote",
+    "body",           # paragraph style for ordinary body-text (正文) paragraphs
+    "table",          # paragraph style for text inside table cells (default Normal)
+    "threelinetable", # Word *table* style applied to a 三线表 (first cmd is \toprule)
+}
+_STYLE_OVERRIDE_RE = re.compile(
+    r"\\texwordstyle\s*\{([^}]*)\}\s*\{([^}]*)\}"
+)
+#: \texwordcaption keys: per-kind label words + wording knobs (see caption_config).
+_CAPTION_OVERRIDE_KEYS = {
+    "figurelabel", "tablelabel", "equationlabel", "algorithmlabel",
+    "labelsep", "sectionsep", "delim", "eqopen", "eqclose",
+}
+_CAPTION_OVERRIDE_RE = re.compile(
+    r"\\texwordcaption\s*\{([^}]*)\}\s*\{([^}]*)\}"
+)
+
+
+def _detect_style_overrides(doc: ir.Document, source: str) -> None:
+    """Pick up ``\\texwordstyle{role}{Word style name}`` bindings from the source.
+
+    Binds a logical role to a paragraph style *name* in the ``--reference-doc``
+    template: ``appendix1``..``appendix4`` (appendix heading levels) and ``part``
+    drive the heading style + its linked numbering; ``figure`` styles the image
+    line; ``caption`` is the default caption style, overridable per type by
+    ``figurecaption`` / ``tablecaption`` / ``subfigurecaption`` /
+    ``algorithmcaption``; the generic paragraph roles (``title``, ``subtitle``,
+    ``abstract``, ``sourcecode``, ``quote``, ``bibliography``, ``footnote``) restyle
+    those paragraphs. ``body`` sets the paragraph style of ordinary body-text (正文)
+    paragraphs (default ``Normal``), so 正文 can be an indented ``normal-indent``-style
+    rather than plain ``Normal``. ``table`` sets the paragraph style of the text inside every
+    table cell (default ``Normal``); ``threelinetable`` names a Word *table* style
+    applied to tables whose first command is ``\\toprule`` (booktabs 三线表), so the
+    template's three-line border format takes effect. The pipeline resolves each name
+    to the template's styleId and
+    applies it; an unbound generic role is auto-discovered by name in the template.
+    Unknown roles are ignored.
+    """
+    for m in _STYLE_OVERRIDE_RE.finditer(source):
+        role = m.group(1).strip().lower()
+        name = m.group(2).strip()
+        if role in _STYLE_OVERRIDE_ROLES and name:
+            doc.meta.style_overrides[role] = name
+
+
+def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
+    """Pick up ``\\texwordcaption{key}{value}`` caption/cross-ref wording overrides.
+
+    Keys: ``figurelabel``/``tablelabel``/``equationlabel``/``algorithmlabel`` set
+    the displayed label word; ``labelsep`` the gap between label and number;
+    ``sectionsep`` the chapter/number separator (e.g. ``-`` for "1-1");
+    ``delim`` the text before the caption; ``eqopen``/``eqclose`` the equation
+    parentheses. The value is kept verbatim (spaces are significant), so e.g.
+    ``\\texwordcaption{delim}{ - }`` keeps the surrounding spaces. Unknown keys
+    are ignored.
+    """
+    for m in _CAPTION_OVERRIDE_RE.finditer(source):
+        key = m.group(1).strip().lower()
+        if key in _CAPTION_OVERRIDE_KEYS:
+            doc.meta.caption_overrides[key] = m.group(2)
+
+
 def _detect_language(preamble: str) -> str | None:
     """The main document language as a BCP-47 code from babel/polyglossia, or None."""
     # polyglossia: \setmainlanguage{...} / \setdefaultlanguage{...}
@@ -2366,6 +2629,12 @@ def _detect_language(preamble: str) -> str | None:
                  if o.strip().lower() in _BABEL_LANG]
         if known:
             return _BABEL_LANG[known[-1]]
+    # ctex: \documentclass{ctexart|ctexrep|ctexbook} or \usepackage{ctex} sets up
+    # Chinese typesetting (CJK fonts, captions) without a babel/polyglossia option,
+    # so treat it as the zh-CN main language.
+    if re.search(r"\\documentclass(?:\[[^\]]*\])?\{ctex(?:art|rep|book)\}", preamble) \
+            or re.search(r"\\usepackage(?:\[[^\]]*\])?\{ctex\}", preamble):
+        return "zh-CN"
     return None
 
 

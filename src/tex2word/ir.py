@@ -57,6 +57,11 @@ RefKind = Literal[
 @dataclass
 class Text(Node):
     value: str
+    #: True for a directly-typed CJK-style curly quote (“”‘’) read literally from
+    #: the source -- the back-end gives it the document's East-Asian proofing
+    #: language in a Chinese document (so Word renders it with the CJK font),
+    #: while quotes from LaTeX commands (``\`\` ''``, \enquote) stay untagged.
+    cjk_quote: bool = False
 
 
 @dataclass
@@ -107,6 +112,27 @@ class Link(Node):
     url: str
     anchor: str | None = None  # \hyperref[label]: internal bookmark target (raw label
     #: until resolved by the cross-reference transform, then the sanitized bookmark)
+
+
+@dataclass
+class DisplayMath(Node):
+    """A display equation that shares a paragraph with surrounding text.
+
+    Carries the same payload as :class:`MathBlock` but lives inside a
+    :class:`Paragraph`'s inline list, so the back-end can keep it in the same
+    Word paragraph as the explanatory text (joined by soft line breaks) instead
+    of splitting it into its own block. An isolated display equation (blank line
+    on both sides) still becomes a block-level :class:`MathBlock`.
+    """
+
+    latex: str
+    numbered: bool = False
+    label: str | None = None
+    env: str = "displaymath"
+
+    def to_block(self) -> "MathBlock":
+        return MathBlock(latex=self.latex, numbered=self.numbered,
+                         label=self.label, env=self.env)
 
 
 @dataclass
@@ -188,8 +214,9 @@ class Image(Node):
 
 
 Inline = (
-    Text | Emphasis | Math | Ref | Cite | Link | LineBreak | Footnote | Endnote
-    | Colored | FontSize | Image | RawInline | Comment | IndexEntry
+    Text | Emphasis | Math | DisplayMath | Ref | Cite | Link | LineBreak
+    | Footnote | Endnote | Colored | FontSize | Image | RawInline | Comment
+    | IndexEntry
 )
 
 
@@ -264,11 +291,14 @@ class Table(Node):
     rows: list[TableRow]
     colspec: list[TableAlign] = field(default_factory=list)
     booktabs: bool = False
+    three_line: bool = False  # first command inside the tabular is \toprule (三线表)
     caption: list[Inline] | None = None
     label: str | None = None
     colwidths: list[float | None] = field(default_factory=list)  # per-column EMU (p{})
     caption_numbered: bool = True  # False for \caption* (unnumbered caption)
     spanning: bool = False  # table* -> span the full page width in a multi-column body
+    caption_above: bool = False  # caption rendered above the body (\caption before tabular)
+    align: TableAlign | None = None  # \centering inside the table float -> "center"
 
 
 @dataclass
@@ -276,6 +306,7 @@ class SubFigure(Node):
     image: Image | None
     caption: list[Inline] | None = None
     label: str | None = None
+    caption_above: bool = False  # caption rendered above the image (\caption before graphics)
 
 
 @dataclass
@@ -287,6 +318,7 @@ class Figure(Node):
     subfigures: list[SubFigure] = field(default_factory=list)
     caption_numbered: bool = True  # False for \caption* (unnumbered caption)
     spanning: bool = False  # figure* -> span the full page width in a multi-column body
+    caption_above: bool = False  # caption rendered above the image (\caption before graphics)
 
 
 @dataclass
@@ -406,6 +438,12 @@ class DocumentMeta(Node):
     cjk_main_font: str | None = None  # \setCJKmainfont -> East-Asian default (eastAsia)
     cjk_sans_font: str | None = None  # \setCJKsansfont -> East-Asian font for headings
     cjk_mono_font: str | None = None  # \setCJKmonofont -> East-Asian font for code
+    # \texwordstyle{role}{Word style name}: bind a logical role (appendix1..4,
+    # part, body, ...) to a reference template's paragraph style + its linked numbering.
+    style_overrides: dict[str, str] = field(default_factory=dict)
+    # \texwordcaption{key}{value}: override caption/cross-ref wording (label word,
+    # separators, delimiter, equation parens) -- see backend.caption_config.
+    caption_overrides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

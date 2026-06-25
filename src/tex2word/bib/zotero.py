@@ -68,11 +68,21 @@ def citation_field(
     return fields.field(f"ADDIN ZOTERO_ITEM CSL_CITATION {payload}", rendered or " ")
 
 
-def bibliography_field_runs(rendered_lines: list[str]) -> list[_Element]:
-    """Build the runs for the ``CSL_BIBLIOGRAPHY`` field instruction.
+_BIBL_CODE = ' ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY '
 
-    The formatted reference list itself is emitted as ordinary paragraphs by the
-    caller (inside the field's begin/end), so reference managers can refresh it.
+
+def bibliography_field_begin() -> list[_Element]:
+    """Runs that *open* the ``CSL_BIBLIOGRAPHY`` field (begin/instr/separate).
+
+    The formatted reference paragraphs must follow as the field *result* and the
+    field must be closed with :func:`bibliography_field_end`. Emitting the list
+    between ``separate`` and ``end`` is what lets Zotero refresh it in place — if
+    the references sit *outside* the field, a refresh duplicates them (the field
+    regenerates its own copy) and "update field" has nothing to recompute.
     """
-    code = 'ADDIN ZOTERO_BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY'
-    return fields.field(code, "")
+    return fields.field_begin(_BIBL_CODE)
+
+
+def bibliography_field_end() -> _Element:
+    """The run that *closes* the ``CSL_BIBLIOGRAPHY`` field (``fldChar end``)."""
+    return fields.field_end()

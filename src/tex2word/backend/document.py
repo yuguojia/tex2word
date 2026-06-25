@@ -16,17 +16,13 @@ from typing import Any
 from lxml import etree
 
 from .. import ir
+from ..mathml import omml
 from ..mathml.cascade import ImageMathRenderer, MathCascade
 from ..report import ConversionReport
 from . import fields, images, raster
-from .numbering import (
-    BULLET_NUM_ID,
-    DECIMAL_NUM_ID,
-    HEADING_APPENDIX_NUM_ID,
-    HEADING_NUM_ID,
-    PART_NUM_ID,
-)
-from .ooxml import el, preserve_space, serialize, sub, text_el
+from .caption_config import CaptionConfig
+from .numbering import NumIds
+from .ooxml import el, preserve_space, qn, serialize, sub, text_el
 
 _Element = etree._Element
 
@@ -64,12 +60,53 @@ class DocumentWriter:
         page_pgmar: dict[str, str] | None = None,
         header_footer_refs: list[tuple[str, str, str]] | None = None,
         preamble: str = "",
+        appendix_style_ids: list[str | None] | None = None,
+        part_style_id: str | None = None,
+        figure_style_id: str | None = None,
+        caption_style_ids: dict[str, str | None] | None = None,
+        table_text_style_id: str | None = None,
+        threeline_table_style_id: str | None = None,
+        body_style_id: str | None = None,
+        style_remap: dict[str, str] | None = None,
+        caption_config: CaptionConfig | None = None,
+        cjk_quote_hint: bool = False,
+        num_ids: NumIds | None = None,
     ) -> None:
         self.report = report
         self.base_dir = base_dir
+        #: numIds stamped onto auto-numbered blocks (lists / headings / \part).
+        #: Defaults to our bundled 1-5; shifted clear of a --reference-doc's own.
+        self._num_ids = num_ids or NumIds()
+        #: reference-template styleIds bound to appendix heading levels 1..4 and
+        #: \part via \texwordstyle, or None to keep the built-in Heading styles.
+        self.appendix_style_ids = (appendix_style_ids or []) + [None] * 4
+        self.part_style_id = part_style_id
+        #: \texwordstyle{figure} override for the image-line paragraph style.
+        self._figure_style = figure_style_id or "Normal"
+        #: \texwordstyle caption overrides keyed by kind ("Figure"/"Table"/
+        #: "subfigure"/"Algorithm"); each None falls back to the built-in Caption.
+        self._caption_style_ids = caption_style_ids or {}
+        #: \texwordstyle{table} override for the text inside table cells (else Normal).
+        self._table_text_style = table_text_style_id or "Normal"
+        #: \texwordstyle{threelinetable} Word table style applied to a 三线表 (a
+        #: tabular whose first command is \toprule), or None to keep the full grid.
+        self._threeline_table_style = threeline_table_style_id
+        #: \texwordstyle{body} override for ordinary body-text (正文) paragraphs:
+        #: the default paragraph style at body level (else the built-in Normal), so
+        #: 正文 can be e.g. an indented "normal-indent" style instead of plain Normal.
+        self._body_style = body_style_id or "Normal"
+        #: {canonical styleId -> effective styleId} for \texwordstyle paragraph-style
+        #: roles (abstract/sourcecode/title/...): explicit binding or auto-discovery.
+        self._style_remap = style_remap or {}
         #: document preamble (for compiling TikZ pictures to images)
         self.preamble = preamble
         self.number_by_section = number_by_section
+        #: localisable caption/cross-reference wording (labels, separators, prefixes).
+        self.caption_cfg = caption_config or CaptionConfig.english()
+        #: In a Chinese document, give a directly-typed curly quote (“”‘’) an
+        #: ``w:rFonts w:hint="eastAsia"`` so Word renders it with the CJK font
+        #: (full-width quote); LaTeX-command quotes keep the default (Latin) font.
+        self.cjk_quote_hint = cjk_quote_hint
         self.citation_mode = citation_mode
         self.columns = max(columns, 1)
         #: page geometry (from a --reference-doc), or None for the built-in default.
@@ -224,19 +261,25 @@ class DocumentWriter:
 
     def _heading(self, block: ir.Heading, body: _Element) -> None:
         style = _HEADING_STYLE.get(block.level, "Heading5")
+        # \texwordstyle overrides: appendix levels and \part adopt the template's
+        # named paragraph style (whose linked multilevel list numId 4/5 point at).
+        if block.part and self.part_style_id:
+            style = self.part_style_id
+        elif block.appendix and 1 <= block.level <= 4 and self.appendix_style_ids[block.level - 1]:
+            style = self.appendix_style_ids[block.level - 1]
         p = self._styled_paragraph(style)
         if block.part and block.numbered:
             ppr = p.find(_qn("w:pPr"))
             assert ppr is not None
             numpr = sub(ppr, "w:numPr")
             sub(numpr, "w:ilvl", **{"w:val": "0"})
-            sub(numpr, "w:numId", **{"w:val": str(PART_NUM_ID)})
+            sub(numpr, "w:numId", **{"w:val": str(self._num_ids.part)})
         elif block.numbered and 1 <= block.level <= 4:
             ppr = p.find(_qn("w:pPr"))
             assert ppr is not None
             numpr = sub(ppr, "w:numPr")
             sub(numpr, "w:ilvl", **{"w:val": str(block.level - 1)})
-            num_id = HEADING_APPENDIX_NUM_ID if block.appendix else HEADING_NUM_ID
+            num_id = self._num_ids.appendix if block.appendix else self._num_ids.heading
             sub(numpr, "w:numId", **{"w:val": str(num_id)})
         start = None
         if block.label:
@@ -268,44 +311,96 @@ class DocumentWriter:
             body.append(p)
             return
 
-        for idx, omath in enumerate(result.omath):
-            if block.numbered:
-                body.append(self._numbered_equation(omath, block, first=(idx == 0)))
-            else:
-                p = self._styled_paragraph("Normal")
-                para = el("m:oMathPara")
-                para.append(omath)
-                p.append(para)
-                body.append(p)
+        if block.numbered:
+            body.append(self._numbered_equation(block, result.omath))
+            return
+        for omath in result.omath:
+            p = self._styled_paragraph("Normal")
+            para = el("m:oMathPara")
+            para.append(omath)
+            p.append(para)
+            body.append(p)
 
-    def _numbered_equation(self, omath: _Element, block: ir.MathBlock, first: bool) -> _Element:
-        p = el("w:p")
-        ppr = sub(p, "w:pPr")
-        tabs = sub(ppr, "w:tabs")
-        sub(tabs, "w:tab", **{"w:val": "center", "w:pos": "4680"})
-        sub(tabs, "w:tab", **{"w:val": "right", "w:pos": "9360"})
-        # tab -> equation -> tab -> (SEQ)
-        p.append(self._tab_run())
-        p.append(omath)
-        p.append(self._tab_run())
-        p.append(self._run("("))
+    def _numbered_equation(self, block: ir.MathBlock, omaths: list[_Element]) -> _Element:
+        """A numbered display equation: an ``m:eqArr`` per line inside one
+        ``m:oMathPara`` whose ``#`` separator right-aligns each line's number.
+
+        Multi-line numbered envs (``align``/``eqnarray``/…) keep the ``&``
+        alignment as ``m:aln`` marks so the relations line up; everything else
+        wraps its already-rendered (possibly column-collapsed) content as a
+        single row."""
+        p = self._styled_paragraph("Normal")
+        p.append(self._numbered_equation_para(block, omaths))
+        return p
+
+    def _numbered_equation_para(
+        self, block: ir.MathBlock, omaths: list[_Element]
+    ) -> _Element:
+        """The ``m:oMathPara`` for a numbered equation (without its paragraph), so
+        it can also be embedded inline alongside explanatory text."""
+        lines = self._equation_lines(block, omaths)
+        para = el("m:oMathPara")
+        last = len(lines) - 1
+        for idx, segments in enumerate(lines):
+            omath = el("m:oMath")
+            eqarr = sub(omath, "m:eqArr")
+            # maxDist spreads the row to the full width so '#' parks the number
+            # hard against the right margin (the native Word numbered-eqn layout).
+            sub(sub(eqarr, "m:eqArrPr"), "m:maxDist", **{"m:val": "1"})
+            e = sub(eqarr, "m:e")
+            for seg_idx, seg in enumerate(segments):
+                if seg_idx > 0:
+                    _mark_alignment(seg)
+                for elem in seg:
+                    e.append(elem)
+            for run in self._equation_number(block, first=(idx == 0)):
+                e.append(run)
+            if idx != last:  # a soft line break stacks the rows in one math para
+                br = el("m:r")
+                sub(br, "w:br")
+                omath.append(br)
+            para.append(omath)
+        if self.math.cjk_font:
+            omml.tag_cjk_runs(para, self.math.cjk_font)
+        return para
+
+    def _equation_lines(
+        self, block: ir.MathBlock, omaths: list[_Element]
+    ) -> list[list[list[_Element]]]:
+        """``lines -> &-segments -> elements`` for a numbered equation. The
+        ``align`` family is re-rendered with alignment marks preserved; other
+        envs reuse the cascade's output (one un-aligned segment per line)."""
+        if block.env in _MULTILINE_NUMBERED_ENVS:
+            try:
+                return omml.render_block_segments(block.latex)
+            except Exception:  # fall back to the un-aligned, already-rendered lines
+                pass
+        return [[list(o)] for o in omaths]
+
+    def _equation_number(self, block: ir.MathBlock, first: bool) -> list[_Element]:
+        """The ``#(N)`` number machinery appended inside a line's ``m:e``."""
+        eq_open, eq_close = self.caption_cfg.eq_wrap
+        out: list[_Element] = [
+            fields.math_text_run("#", nor=False),  # right-align separator for m:eqArr
+            fields.math_text_run(eq_open),
+        ]
         start = None
         if block.label and first:
             start = fields.bookmark_start(_bookmark_for(block.label))
-            p.append(start)
-        for run in fields.number_field("Equation", self.number_by_section):
-            p.append(run)
+            out.append(start)
+        out += fields.math_number_field("Equation", self.number_by_section,
+                                        self.caption_cfg.section_sep)
         if start is not None:
-            p.append(fields.bookmark_end_for(start))
-        p.append(self._run(")"))
-        return p
+            out.append(fields.bookmark_end_for(start))
+        out.append(fields.math_text_run(eq_close))
+        return out
 
     def _list(self, block: ir.ItemList, body: _Element, level: int = 0) -> None:
         if block.description:
             for item in block.items:
                 self._description_item(item, body, level)
             return
-        num_id = DECIMAL_NUM_ID if block.ordered else BULLET_NUM_ID
+        num_id = self._num_ids.decimal if block.ordered else self._num_ids.bullet
         for item in block.items:
             self._list_item(item, body, level, num_id)
 
@@ -396,10 +491,22 @@ class DocumentWriter:
     def _table(self, block: ir.Table, body: _Element) -> None:
         tbl = el("w:tbl")
         tpr = sub(tbl, "w:tblPr")
+        # a 三线表 (first command is \toprule) adopts the bound Word table style and
+        # leaves border formatting to it; tblStyle must precede tblW in CT_TblPr.
+        three_line = block.three_line and self._threeline_table_style is not None
+        if three_line:
+            sub(tpr, "w:tblStyle", **{"w:val": self._threeline_table_style})
         sub(tpr, "w:tblW", **{"w:w": "0", "w:type": "auto"})
-        borders = sub(tpr, "w:tblBorders")
-        for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
-            sub(borders, f"w:{side}", **{"w:val": "single", "w:sz": "4", "w:color": "auto"})
+        # \centering inside the table float -> center the table on the page; w:jc
+        # must follow tblW and precede tblBorders in CT_TblPr.
+        if block.align in ("center", "right"):
+            sub(tpr, "w:jc", **{"w:val": "center" if block.align == "center" else "end"})
+        if not three_line:
+            # direct tblBorders would override a table style's borders, so only emit
+            # the default full grid when no three-line table style applies.
+            borders = sub(tpr, "w:tblBorders")
+            for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                sub(borders, f"w:{side}", **{"w:val": "single", "w:sz": "4", "w:color": "auto"})
         ncols = max((sum(c.colspan for c in r.cells) for r in block.rows), default=1)
         # p{width} column widths -> twips (dxa); 914400 EMU = 1440 twips.
         widths = [int(w / 635) if w else None for w in block.colwidths]
@@ -434,10 +541,15 @@ class DocumentWriter:
                 if cell.rowspan > 1:
                     vmerge_pending[col] = (cell.rowspan - 1, cell.colspan)
                 col += cell.colspan
-        body.append(tbl)
+        cap = None
         if block.caption is not None:
-            body.append(self._caption("Table", block.caption, block.label,
-                                      numbered=block.caption_numbered))
+            cap = self._caption("Table", block.caption, block.label,
+                                numbered=block.caption_numbered)
+        if cap is not None and block.caption_above:
+            body.append(cap)
+        body.append(tbl)
+        if cap is not None and not block.caption_above:
+            body.append(cap)
 
     def _table_cell(self, tr: _Element, cell: ir.TableCell, width: int | None = None) -> None:
         tc = sub(tr, "w:tc")
@@ -458,7 +570,7 @@ class DocumentWriter:
         last_is_para = False
         for cb in cell.blocks:
             if isinstance(cb, ir.Paragraph):
-                p = self._styled_paragraph("Normal")
+                p = self._styled_paragraph(self._table_text_style)
                 self._set_align(p, cell.align)
                 self._inlines(cb.inlines, p)
                 tc.append(p)
@@ -468,7 +580,7 @@ class DocumentWriter:
                 last_is_para = False
         # a table cell must end with a paragraph (Word/ECMA-376 requirement)
         if not last_is_para:
-            tc.append(self._styled_paragraph("Normal"))
+            tc.append(self._styled_paragraph(self._table_text_style))
 
     def _merge_continue_cell(self, tr: _Element, colspan: int) -> None:
         tc = sub(tr, "w:tc")
@@ -476,7 +588,7 @@ class DocumentWriter:
         if colspan > 1:
             sub(tcpr, "w:gridSpan", **{"w:val": str(colspan)})
         sub(tcpr, "w:vMerge")  # continue the merge
-        tc.append(self._styled_paragraph("Normal"))
+        tc.append(self._styled_paragraph(self._table_text_style))
 
     def _figure(self, block: ir.Figure, body: _Element) -> None:
         # wrap in a tagged block SDT so the round-trip reader recovers one
@@ -485,6 +597,13 @@ class DocumentWriter:
         sdt = el("w:sdt")
         sub(sub(sdt, "w:sdtPr"), "w:tag", **{"w:val": FIG_SDT_TAG})
         content = sub(sdt, "w:sdtContent")
+        cap = None
+        if block.caption is not None:
+            bookmark = _figure_bookmark(block)
+            cap = self._caption("Figure", block.caption, block.label, bookmark=bookmark,
+                                numbered=block.caption_numbered)
+        if cap is not None and block.caption_above:
+            content.append(cap)
         if block.subfigures:
             self._subfigures(block, content)
         elif block.image is None:
@@ -496,12 +615,8 @@ class DocumentWriter:
                 content.append(rendered)
         else:
             content.append(self._image_paragraph(block.image))
-        if block.caption is not None:
-            bookmark = _figure_bookmark(block)
-            content.append(
-                self._caption("Figure", block.caption, block.label, bookmark=bookmark,
-                              numbered=block.caption_numbered)
-            )
+        if cap is not None and not block.caption_above:
+            content.append(cap)
         body.append(sdt)
 
     def _render_tikz(self, block: ir.Figure) -> _Element | None:
@@ -528,7 +643,7 @@ class DocumentWriter:
             return None
         data, w, h = result
         self.report.info("figure", "rendered TikZ figure to an image")
-        p = self._styled_paragraph("Normal")
+        p = self._styled_paragraph(self._figure_style)
         self._set_align(p, "center")
         r = el("w:r")
         r.append(self._register_and_draw(data, images.ImageInfo("png", w, h), "tikz.png"))
@@ -553,6 +668,12 @@ class DocumentWriter:
             letter = chr(ord("a") + idx)
             tc = sub(tr, "w:tc")
             sub(sub(tc, "w:tcPr"), "w:tcW", **{"w:w": "0", "w:type": "auto"})
+            cap = self._styled_paragraph(self._caption_style_for("subfigure"))
+            cap.append(self._run(f"({letter}) ", bold=True))
+            if subfig.caption:
+                self._inlines(subfig.caption, cap)
+            if subfig.caption_above:
+                tc.append(cap)
             if subfig.image is not None:
                 tc.append(self._image_paragraph(subfig.image, max_width_emu=col_emu))
             else:
@@ -560,15 +681,12 @@ class DocumentWriter:
                 self._set_align(ph, "center")
                 ph.append(self._run("[sub-figure omitted]", italic=True))
                 tc.append(ph)
-            cap = self._styled_paragraph("Caption")
-            cap.append(self._run(f"({letter}) ", bold=True))
-            if subfig.caption:
-                self._inlines(subfig.caption, cap)
-            tc.append(cap)
+            if not subfig.caption_above:
+                tc.append(cap)
         body.append(tbl)
 
     def _image_paragraph(self, image: ir.Image, max_width_emu: int | None = None) -> _Element:
-        p = self._styled_paragraph("Normal")
+        p = self._styled_paragraph(self._figure_style)
         self._set_align(p, "center")
         drawing = self._embed_image(image, max_width_emu)
         if drawing is None:
@@ -753,6 +871,13 @@ class DocumentWriter:
             p.append(run)
         body.append(p)
 
+    def _caption_style_for(self, kind: str) -> str:
+        """The paragraph style for a caption of *kind* ("Figure"/"Table"/...).
+
+        A \\texwordstyle per-type or default binding, else the built-in Caption.
+        """
+        return self._caption_style_ids.get(kind) or "Caption"
+
     def _caption(
         self,
         counter: str,
@@ -761,22 +886,23 @@ class DocumentWriter:
         bookmark: str | None = None,
         numbered: bool = True,
     ) -> _Element:
-        p = self._styled_paragraph("Caption")
+        p = self._styled_paragraph(self._caption_style_for(counter))
         if not numbered:
             # \caption*: no counter/SEQ, no "Figure N:" prefix -- just the text.
             self._inlines(caption, p)
             return p
-        p.append(self._run(f"{counter} "))
+        cfg = self.caption_cfg
+        p.append(self._run(f"{cfg.label(counter)}{cfg.label_number_sep}"))
         name = bookmark or (_bookmark_for(label) if label else None)
         start = None
         if name:
             start = fields.bookmark_start(name)
             p.append(start)
-        for run in fields.number_field(counter, self.number_by_section):
+        for run in fields.number_field(counter, self.number_by_section, cfg.section_sep):
             p.append(run)
         if start is not None:
             p.append(fields.bookmark_end_for(start))
-        p.append(self._run(": "))
+        p.append(self._run(cfg.delim))
         self._inlines(caption, p)
         return p
 
@@ -800,15 +926,24 @@ class DocumentWriter:
             start = fields.bookmark_start(_bookmark_for("bib_" + item.id))
             p.append(start)
             if i == 1 and zotero:
-                from ..bib.zotero import bibliography_field_runs
+                # Open the CSL_BIBLIOGRAPHY field *before* the first reference so
+                # the whole list is the field result; closed after the last one
+                # below. This keeps Zotero refreshes in place (no duplicate list).
+                from ..bib.zotero import bibliography_field_begin
 
-                for run in bibliography_field_runs([]):
+                for run in bibliography_field_begin():
                     p.append(run)
             if block.style == "numeric":
                 p.append(self._run(f"[{i}]\t"))
             p.append(self._run(format_reference(item)))
             p.append(fields.bookmark_end_for(start))
             content.append(p)
+        if zotero and block.entries:
+            from ..bib.zotero import bibliography_field_end
+
+            closer = self._styled_paragraph("Bibliography")
+            closer.append(bibliography_field_end())
+            content.append(closer)
         body.append(sdt)
 
     def _code_block(self, block: ir.CodeBlock, body: _Element) -> None:
@@ -832,7 +967,7 @@ class DocumentWriter:
         tc = sub(sub(tbl, "w:tr"), "w:tc")
 
         if block.caption is not None or block.label:
-            cap = self._styled_paragraph("Caption")
+            cap = self._styled_paragraph(self._caption_style_for("Algorithm"))
             # a rule under the caption
             cap_ppr = cap.find(_qn("w:pPr"))
             assert cap_ppr is not None
@@ -840,16 +975,17 @@ class DocumentWriter:
             sub(pbdr, "w:bottom", **{
                 "w:val": "single", "w:sz": "6", "w:space": "2", "w:color": "auto",
             })
-            cap.append(self._run("Algorithm ", bold=True))
+            cfg = self.caption_cfg
+            cap.append(self._run(f"{cfg.label('Algorithm')}{cfg.label_number_sep}", bold=True))
             start = None
             if block.label:
                 start = fields.bookmark_start(_bookmark_for(block.label))
                 cap.append(start)
-            for run in fields.number_field("Algorithm", self.number_by_section):
+            for run in fields.number_field("Algorithm", self.number_by_section, cfg.section_sep):
                 cap.append(run)
             if start is not None:
                 cap.append(fields.bookmark_end_for(start))
-            cap.append(self._run(": ", bold=True))
+            cap.append(self._run(cfg.delim, bold=True))
             if block.caption:
                 self._inlines(block.caption, cap)
             tc.append(cap)
@@ -895,7 +1031,8 @@ class DocumentWriter:
             if block.label:
                 start = fields.bookmark_start(_bookmark_for(block.label))
                 p.append(start)
-            for run in fields.number_field(block.counter, self.number_by_section):
+            for run in fields.number_field(block.counter, self.number_by_section,
+                                           self.caption_cfg.section_sep):
                 p.append(run)
             if start is not None:
                 p.append(fields.bookmark_end_for(start))
@@ -919,8 +1056,62 @@ class DocumentWriter:
     # -- inline ----------------------------------------------------------- #
 
     def _inlines(self, inlines: list[ir.Inline], p: _Element) -> None:
-        for node in inlines:
-            self._inline(node, p)
+        for idx, node in enumerate(inlines):
+            if isinstance(node, ir.DisplayMath):
+                # a display equation sharing the paragraph with text: a soft break
+                # ends the lead-in text, and another ends the equation when more
+                # text follows (so they stay in one Word paragraph).
+                lead = _has_visible_inline(inlines[:idx])
+                trail = _has_visible_inline(inlines[idx + 1:])
+                self._display_math_inline(node, p, lead_break=lead, trail_break=trail)
+            else:
+                self._inline(node, p)
+
+    def _soft_break(self, p: _Element) -> None:
+        r = el("w:r")
+        sub(r, "w:br")
+        p.append(r)
+
+    def _display_math_inline(
+        self, node: ir.DisplayMath, p: _Element, *, lead_break: bool, trail_break: bool
+    ) -> None:
+        block = node.to_block()
+        collapse = not (block.numbered and block.env in _MULTILINE_NUMBERED_ENVS)
+        result = self.math.block(block.latex, collapse_align=collapse)
+        if result.path == "image" and result.image is not None:
+            if lead_break:
+                self._soft_break(p)
+            data, fmt = result.image
+            r = el("w:r")
+            r.append(self._embed_image_bytes(data, fmt, "equation"))
+            p.append(r)
+            if trail_break:
+                self._soft_break(p)
+            return
+        if result.path == "raw" or result.omath is None:
+            if lead_break:
+                self._soft_break(p)
+            p.append(self._run(f"\\[{block.latex}\\]", italic=True))
+            if trail_break:
+                self._soft_break(p)
+            return
+        if lead_break:
+            self._soft_break(p)
+        if block.numbered:
+            para = self._numbered_equation_para(block, result.omath)
+        else:
+            para = el("m:oMathPara")
+            for omath in result.omath:
+                para.append(omath)
+            if self.math.cjk_font:
+                omml.tag_cjk_runs(para, self.math.cjk_font)
+        if trail_break and len(para):
+            # a soft break inside the last m:oMath separates it from the text that
+            # follows in the same paragraph.
+            br = el("m:r")
+            sub(br, "w:br")
+            para[-1].append(br)
+        p.append(para)
 
     def _inline(self, node: ir.Inline, p: _Element) -> None:
         self._emit(node, p, _RunStyle())
@@ -932,7 +1123,10 @@ class DocumentWriter:
         # leaf + style-carrying nodes thread the accumulated run style; the rest
         # (math, refs, links, ...) render once and ignore inline styling.
         if isinstance(node, ir.Text):
-            p.append(self._run(node.value, **st.kwargs()))
+            kw = st.kwargs()
+            if node.cjk_quote and self.cjk_quote_hint:
+                kw["eastasia_hint"] = True
+            p.append(self._run(node.value, **kw))
         elif isinstance(node, ir.Emphasis):
             st2 = st.with_flag(_STYLE_FLAG[node.kind_])
             for child in node.inlines:
@@ -1017,17 +1211,20 @@ class DocumentWriter:
         if node.bookmark is None:
             p.append(self._run("??"))
             return
-        # cleveref-style type prefix ("Figure ", "fig. ", ...)
-        prefix = _REF_PREFIX.get((node.ref_kind, node.style))
-        if prefix:
-            p.append(self._run(prefix))
+        # cleveref-style type prefix ("Figure ", "fig. ", 图, ...)
+        names = self.caption_cfg.ref_names.get(node.ref_kind)
+        if names and node.style in ("abbrev", "full"):
+            prefix = names[0 if node.style == "abbrev" else 1]
+            if prefix:
+                p.append(self._run(prefix))
         if node.ref_kind == "page":
             runs = fields.pageref_field(node.bookmark, "0")
         elif node.ref_kind == "equation":
-            p.append(self._run("("))
+            eq_open, eq_close = self.caption_cfg.eq_wrap
+            p.append(self._run(eq_open))
             for run in fields.ref_field(node.bookmark, "0"):
                 p.append(run)
-            p.append(self._run(")"))
+            p.append(self._run(eq_close))
             return
         elif node.ref_kind in ("section", "listitem"):
             # \r inserts the paragraph's (list) number -- section numbers and the
@@ -1144,10 +1341,12 @@ class DocumentWriter:
              hyperlink: bool = False, superscript: bool = False,
              subscript: bool = False, color: str | None = None,
              shade: str | None = None, strike: bool = False,
-             highlight: bool = False, size: int | None = None) -> _Element:
+             highlight: bool = False, size: int | None = None,
+             eastasia_hint: bool = False) -> _Element:
         r = el("w:r")
         if any([bold, italic, underline, typewriter, smallcaps, hyperlink,
-                superscript, subscript, color, shade, strike, highlight, size]):
+                superscript, subscript, color, shade, strike, highlight, size,
+                eastasia_hint]):
             rpr = sub(r, "w:rPr")
             # children must follow the ECMA-376 CT_RPr sequence, else strict
             # validators reject the run: rStyle, rFonts, b, i, smallCaps, strike,
@@ -1156,6 +1355,9 @@ class DocumentWriter:
                 sub(rpr, "w:rStyle", **{"w:val": "Hyperlink"})
             if typewriter:
                 sub(rpr, "w:rFonts", **{"w:ascii": "Consolas", "w:hAnsi": "Consolas"})
+            elif eastasia_hint:
+                # ambiguous quote glyph -> Word picks the CJK (eastAsia) font.
+                sub(rpr, "w:rFonts", **{"w:hint": "eastAsia"})
             if bold:
                 sub(rpr, "w:b")
             if italic:
@@ -1184,12 +1386,8 @@ class DocumentWriter:
         r.append(t)
         return r
 
-    def _tab_run(self) -> _Element:
-        r = el("w:r")
-        sub(r, "w:tab")
-        return r
-
     def _styled_paragraph(self, style: str) -> _Element:
+        style = self._style_remap.get(style, style)  # \texwordstyle paragraph roles
         p = el("w:p")
         ppr = sub(p, "w:pPr")
         sub(ppr, "w:pStyle", **{"w:val": style})
@@ -1263,26 +1461,40 @@ class _RunStyle:
     def with_flag(self, flag: str) -> _RunStyle:
         return _replace(self, **{flag: True})  # type: ignore[arg-type]
 
-# cleveref-style type prefixes, keyed by (target kind, ref style).
-_REF_NAMES = {
-    "figure": ("fig. ", "Figure "),
-    "table": ("tab. ", "Table "),
-    "section": ("sec. ", "Section "),
-    "theorem": ("thm. ", "Theorem "),
-    "algorithm": ("alg. ", "Algorithm "),
-    "equation": ("eq. ", "Equation "),
-}
-_REF_PREFIX = {
-    (kind, "abbrev"): names[0] for kind, names in _REF_NAMES.items()
-} | {
-    (kind, "full"): names[1] for kind, names in _REF_NAMES.items()
-}
-
 
 def _bookmark_for(label: str) -> str:
     from ..transforms.crossref import sanitize_bookmark
 
     return sanitize_bookmark(label)
+
+
+def _has_visible_inline(inlines: list[ir.Inline]) -> bool:
+    """Whether *inlines* hold any rendered content (not just whitespace text)."""
+    return any(
+        not (isinstance(x, ir.Text) and not x.value.strip()) for x in inlines
+    )
+
+
+def _mark_alignment(seg: list[_Element]) -> None:
+    """Mark the start of an ``&`` segment as an ``m:aln`` alignment point.
+
+    Word lines up rows of an ``m:eqArr`` at their ``m:aln`` marks, so flagging
+    the first run after each ``&`` makes the relation signs align. A non-run
+    first element (e.g. a fraction) gets an empty marker run prepended."""
+    if not seg:
+        return
+    first = seg[0]
+    if first.tag == qn("m:r"):
+        rpr = first.find(qn("m:rPr"))
+        if rpr is None:
+            rpr = el("m:rPr")
+            first.insert(0, rpr)
+        if rpr.find(qn("m:aln")) is None:
+            sub(rpr, "m:aln")  # aln is last in CT_RPr; append
+    else:
+        marker = el("m:r")
+        sub(sub(marker, "m:rPr"), "m:aln")
+        seg.insert(0, marker)
 
 
 def _figure_bookmark(fig: ir.Figure) -> str | None:

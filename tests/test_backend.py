@@ -41,7 +41,9 @@ def test_inline_math_produces_omath():
 def test_numbered_equation_has_seq_and_bookmark():
     src = r"\begin{document}\begin{equation}\label{eq:e}E=mc^2\end{equation}\end{document}"
     root = document_root(convert_source(src).docx)
-    instrs = "".join(t.text or "" for t in _xpath(root, "//w:instrText"))
+    # the equation number's SEQ field is embedded in the math zone, so its
+    # instruction is carried by m:t rather than w:instrText.
+    instrs = "".join(t.text or "" for t in _xpath(root, "//w:instrText | //m:t"))
     assert "SEQ Equation" in instrs
     assert len(_xpath(root, "//w:bookmarkStart")) >= 1
 

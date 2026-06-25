@@ -68,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
              "de-DE); overrides the babel/polyglossia language detected in the source",
     )
     conv.add_argument(
+        "--caption-locale", choices=("auto", "en", "zh-CN"), default="auto",
+        help="caption/cross-ref wording: 'en' (Figure 1.1), 'zh-CN' (图1-1), or "
+             "'auto' (zh-CN when the document language is zh-CN or a CJK font is set)",
+    )
+    conv.add_argument(
         "-q", "--quiet", action="store_true", help="suppress the stderr summary"
     )
 
@@ -194,6 +199,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
             csl=args.csl,
             reference_doc=args.reference_doc,
             language=args.lang,
+            caption_locale=args.caption_locale,
         )
     except FileNotFoundError:
         print(f"error: input file not found: {args.input}", file=sys.stderr)

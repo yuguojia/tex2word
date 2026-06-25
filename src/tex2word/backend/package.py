@@ -98,6 +98,9 @@ class DocxPackage:
     comments: bytes | None = None
     #: word/theme/theme1.xml (bytes) from a --reference-doc, or None.
     theme: bytes | None = None
+    #: word/settings.xml (bytes) carried from a --reference-doc (its compat/advanced
+    #: options + our updateFields), or None to use the built-in minimal settings.
+    settings: bytes | None = None
     #: carried header/footer parts (archive path -> bytes) from a --reference-doc.
     header_footer_parts: dict[str, bytes] = field(default_factory=dict)
     #: carried header/footer sub-resources (their _rels + media), archive path ->
@@ -179,7 +182,7 @@ class DocxPackage:
             "word/document.xml": self.document_xml,
             "word/styles.xml": self.styles_xml,
             "word/numbering.xml": self.numbering_xml,
-            "word/settings.xml": _SETTINGS.encode("utf-8"),
+            "word/settings.xml": self.settings or _SETTINGS.encode("utf-8"),
             "word/_rels/document.xml.rels": self._document_rels_xml().encode("utf-8"),
         }
         parts.update(self.media)

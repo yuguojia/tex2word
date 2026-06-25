@@ -132,6 +132,12 @@ def _local(e: etree._Element) -> str:
     return etree.QName(e).localname
 
 
+def _has_prose_text(p: etree._Element) -> bool:
+    """Whether *p* carries prose runs (``w:t``) outside any math zone -- the marker
+    of an equation embedded alongside explanatory text (math uses ``m:t``)."""
+    return any((t.text or "").strip() for t in p.iter(_w("t")))
+
+
 def read_docx(docx_bytes: bytes, label_map: dict[str, str] | None = None) -> ir.Document:
     """Read a foreign ``.docx`` to the IR.
 
@@ -332,8 +338,10 @@ class _Reader:
 
     def _paragraph(self, p: etree._Element) -> ir.Block | None:
         style = self._style(p) or "Normal"
-        # display math paragraph (unnumbered: m:oMathPara)
-        if p.find(_m("oMathPara")) is not None:
+        # display math paragraph (unnumbered: m:oMathPara). A paragraph that *also*
+        # carries prose (w:t) is an equation embedded with explanatory text -- read
+        # it as a Paragraph with a DisplayMath inline (handled by _runs) instead.
+        if p.find(_m("oMathPara")) is not None and not _has_prose_text(p):
             return self._math_block(p)
         # numbered equation: inline m:oMath + a SEQ Equation field
         numbered_eq = self._numbered_equation(p)
@@ -368,12 +376,88 @@ class _Reader:
             return None
         return ir.Paragraph(inlines, align=self._alignment(p))
 
+    def _display_math(self, para: etree._Element) -> ir.DisplayMath:
+        """An ``m:oMathPara`` embedded in a prose paragraph -> a DisplayMath inline."""
+        omaths = para.findall(_m("oMath"))
+        seq_text = "".join(t.text or "" for t in para.iter(_m("t")))
+        seq_instr = "".join(t.text or "" for t in para.iter(_w("instrText")))
+        label = self._math_bookmark(para)
+        if "SEQ Equation" in seq_text or "SEQ Equation" in seq_instr:
+            block = self._numbered_math_block(para, omaths)
+            return ir.DisplayMath(latex=block.latex, numbered=True,
+                                  env=block.env, label=label)
+        latex = omath_to_latex(omaths[0]) if omaths else ""
+        return ir.DisplayMath(latex=latex, numbered=False, env="displaymath", label=label)
+
     def _math_block(self, p: etree._Element) -> ir.MathBlock:
         para = p.find(_m("oMathPara"))
-        omath = para.find(_m("oMath")) if para is not None else None
-        latex = omath_to_latex(omath) if omath is not None else ""
+        omaths = para.findall(_m("oMath")) if para is not None else []
+        # A numbered equation carries a "SEQ Equation" field; inside a math zone
+        # the instruction lives in m:t (not w:instrText), wrapped in an m:eqArr.
+        seq_text = "".join(t.text or "" for t in p.iter(_m("t")))
+        seq_instr = "".join(t.text or "" for t in p.iter(_w("instrText")))
+        if "SEQ Equation" in seq_text or "SEQ Equation" in seq_instr:
+            return self._numbered_math_block(p, omaths)
+        latex = omath_to_latex(omaths[0]) if omaths else ""
         return ir.MathBlock(latex=latex, numbered=False, env="displaymath",
-                            label=self._bookmark(p))
+                            label=self._math_bookmark(p))
+
+    def _numbered_math_block(
+        self, p: etree._Element, omaths: list[etree._Element]
+    ) -> ir.MathBlock:
+        """Recover a numbered equation written as ``m:eqArr`` rows: strip the
+        ``#(SEQ)`` number machinery, turn ``m:aln`` marks back into ``&`` and
+        ``w:br``-separated rows into ``\\\\`` lines."""
+        lines: list[str] = []
+        aligned = False
+        for o in omaths:
+            eqarr = o.find(_m("eqArr"))
+            e = eqarr.find(_m("e")) if eqarr is not None else None
+            if e is not None:
+                line, has_amp = self._eqarr_line(e)
+                aligned = aligned or has_amp
+                lines.append(line)
+            else:
+                lines.append(omath_to_latex(o))
+        latex = " \\\\ ".join(lines)
+        env = "align" if (aligned or len(lines) > 1) else "equation"
+        return ir.MathBlock(latex=latex, numbered=True, env=env,
+                            label=self._math_bookmark(p))
+
+    def _eqarr_line(self, e: etree._Element) -> tuple[str, bool]:
+        """One ``m:eqArr`` row -> (LaTeX, has-alignment). Content up to the ``#``
+        separator is kept; ``m:aln``-marked runs start new ``&`` segments."""
+        from copy import deepcopy
+
+        kept: list[etree._Element] = []
+        for c in e:
+            if _local(c) == "r":
+                t = c.find(_m("t"))
+                if t is not None and (t.text or "") == "#":
+                    break  # the equation-number machinery follows -- drop it
+            kept.append(c)
+        segments: list[list[etree._Element]] = [[]]
+        for c in kept:
+            if _local(c) == "r":
+                rpr = c.find(_m("rPr"))
+                if rpr is not None and rpr.find(_m("aln")) is not None:
+                    segments.append([])
+            segments[-1].append(c)
+        parts: list[str] = []
+        for seg in segments:
+            o = etree.Element(_m("oMath"))
+            for c in seg:
+                o.append(deepcopy(c))
+            parts.append(omath_to_latex(o))
+        has_amp = len(segments) > 1
+        return (" & ".join(parts) if has_amp else (parts[0] if parts else "")), has_amp
+
+    def _math_bookmark(self, p: etree._Element) -> str | None:
+        """The first bookmark anywhere in the paragraph (a numbered equation's
+        label bookmark sits inside the math, not as a direct child)."""
+        bm = next(iter(p.iter(_w("bookmarkStart"))), None)
+        name = bm.get(_w("name")) if bm is not None else None
+        return self._resolve_label(name) if name else None
 
     def _numbered_equation(self, p: etree._Element) -> ir.MathBlock | None:
         omath = next((e for e in p.iter(_m("oMath"))), None)
@@ -406,7 +490,12 @@ class _Reader:
 
     def _inlines(self, parent: etree._Element) -> list[ir.Inline]:
         out: list[ir.Inline] = []
-        self._runs(parent, out, None)
+        field = self._runs(parent, out, None)
+        # A field that opened and reached its result but isn't closed in this
+        # paragraph (e.g. the first entry of a multi-paragraph CSL_BIBLIOGRAPHY):
+        # flush its visible result so the text isn't lost.
+        if field is not None and field.get("phase") == "result":
+            self._emit_field(field, out)
         return out
 
     def _runs(
@@ -427,6 +516,8 @@ class _Reader:
                 continue
             if tag in ("ins", "moveTo"):  # accepted insertion -> keep its runs
                 field = self._runs(el, out, field)
+            elif tag == "oMathPara":  # display equation sharing the paragraph
+                out.append(self._display_math(el))
             elif tag == "oMath":  # inline math
                 out.append(ir.Math(omath_to_latex(el)))
             elif tag == "hyperlink":
@@ -720,6 +811,8 @@ class _Reader:
                 continue
             text = re.sub(r"^\[\d+\]\s*", "", _plain_text(self._inlines(p)))
             bm = self._bookmark(p) or ""
+            if not text.strip() and not bm.startswith("bib_"):
+                continue  # the field-closing paragraph (Zotero mode), not an entry
             cid = bm[4:] if bm.startswith("bib_") else f"ref{len(entries) + 1}"
             entries.append(ir.CSLItem(id=cid or f"ref{len(entries) + 1}", type="",
                                       csl_fields={"note": text}))

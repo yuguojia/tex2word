@@ -40,6 +40,187 @@ those documents surfaced.
   restriction/harpoon glyphs (`\restriction`/`\upharpoonright`/…). The `\/`
   italic correction is a silent no-op.
 
+## Unreleased
+
+- **`\texwordstyle{body}{…}` restyles ordinary body text (正文).** A new role sets
+  the paragraph style of plain body-text paragraphs, previously hardcoded to
+  `Normal`: `\texwordstyle{body}{正文缩进}` makes 正文 use an indented
+  `normal-indent`-style from the `--reference-doc` template instead of `Normal`.
+  Only top-level body paragraphs are affected — math, captions, list items, TOC,
+  and other `Normal`-based paragraphs keep their styles.
+- **Display-math rendering matches Word's native equation layout.** Several
+  fixes to the LaTeX→OMML path bring numbered equations in line with what Word
+  itself produces:
+  - **Operators, digits and symbols keep their math spacing.** Operators (`=`,
+    `+`, …), digits and symbol glyphs were tagged `m:nor` (normal text), which
+    stripped the relational/binary-operator spacing so `a=b+c` rendered cramped
+    and lowercase Greek came out upright. They are now plain math runs, so Word
+    spaces them and italicises variables (lowercase Greek included) correctly.
+  - **n-ary operators bind their operand.** `\int_\gamma f` / `\sum_k a_k b_k`
+    now carry the integrand/summand inside the operator (OMML `m:e`), capturing
+    up to the next relation or `+`/`-` sign, instead of leaving the body empty
+    with the operand floating after it.
+  - **Numbered equations number inside the math zone.** A numbered equation is
+    now an `m:eqArr` (with `m:maxDist`) inside `m:oMathPara`, with the number
+    parked at the right margin by the `#` separator — the native Word numbered-
+    equation layout — replacing the previous paragraph-tab + trailing-field
+    scheme. `align`/`eqnarray` lines align at their `&` (now `m:aln` marks) and
+    each keep their own number. The reader recovers this structure back to
+    LaTeX (`&`, `\\`, and the equation label).
+  - **Upright *math* uses the plain style, not normal-text.** `\mathrm`,
+    `\operatorname`, `\symup`/`\uppi` and function names now emit `m:sty="p"`
+    (upright math, keeps math spacing); genuine text (`\text`/`\textrm`/`\mbox`/
+    `\textbf`) still uses `m:nor`.
+- **`--reference-doc` can target a specific section's page geometry + headers/footers
+  via a `tex2word_section` bookmark.** A reference template's page size, margins and
+  running headers/footers are lifted from its body section. Previously we always
+  took the document's *final* section, but a multi-section template (e.g. a thesis
+  template) commonly leaves that last section bare — its running headers/footers
+  live on the main-text sections — so nothing was carried and the output had no
+  headers/footers. A template author can now drop a bookmark named
+  `tex2word_section` on any paragraph of the page they want adopted (in Word:
+  Insert → Bookmark → name `tex2word_section` → Add); we lift the section that
+  governs that paragraph instead. Header/footer types and `pgSz`/`pgMar` the marked
+  section doesn't state itself are inherited from the nearest preceding section,
+  mirroring Word's section inheritance (so marking a section that only overrides the
+  default header still carries the inherited first/even ones). Without the bookmark
+  the behaviour is unchanged — the final section is used.
+- **`--reference-doc` now carries the template's advanced/compatibility options.**
+  The reference document's `word/settings.xml` is adopted, so options like the
+  `w:compat` flags (e.g. `doNotExpandShiftReturn` — "don't expand character spacing
+  on a line that ends with Shift+Enter"), `w:characterSpacingControl`,
+  `w:defaultTabStop`, `w:mathPr` and the drawing-grid/kerning settings now survive
+  conversion instead of being reset to tex2word's minimal defaults. We strip only
+  what would break the output — `w:attachedTemplate` and any relationship-bearing
+  element (we don't carry `settings.xml.rels`, so these would dangle) and
+  `w:writeProtection` / `w:documentProtection` (which would lock the document
+  against editing) — and re-insert `w:updateFields` at its canonical position so
+  Word still recalculates `SEQ`/`REF` fields on first open. Without a reference doc
+  the built-in minimal settings are unchanged.
+- **`--reference-doc` now carries the template's footnotes/endnotes separators.**
+  A template's `settings.xml` references its footnote/endnote separator and
+  continuation-separator definitions (`<w:footnote>`/`<w:endnote>` ids `-1`/`0`),
+  which live in `footnotes.xml`/`endnotes.xml`. We now carry those parts so the
+  references resolve — previously they were dropped, so a document with no notes
+  of its own opened with Word reporting unreadable footnote/endnote content and
+  offering to repair (adding `脚注1`/`尾注1`). We keep only the separator /
+  continuation-separator notes — the template's own body footnotes (ids ≥ 1, which
+  also carry the relationships) are dropped — and when the converted document has
+  its own notes we use the template's separators with our content notes. The
+  validator now also flags a notes-separator reference whose backing part is
+  missing.
+- **Fixed: English text rendered in the Chinese font for CJK documents.** The
+  document language was written to `w:lang`'s `w:val` attribute, which is the
+  *Latin*-script proofing language; for an East-Asian language (zh/ja/ko) that
+  made Word treat ASCII runs as East-Asian and render them in the `eastAsia` font
+  (so English appeared in 宋体). East-Asian languages now go to `w:eastAsia`
+  while `w:val` stays a Latin language (defaulting to `en-US`), so Latin text
+  keeps the Latin font. Western languages are unaffected.
+- **Localisable caption / cross-reference wording (`--caption-locale`).** Captions
+  and `\cref`/`\eqref` prefixes can now read in Chinese: a new `--caption-locale`
+  flag (`auto` / `en` / `zh-CN`) switches the displayed label word (`Figure`→`图`,
+  `Table`→`表`, `Equation`→`公式`, `Algorithm`→`算法`), the chapter/number separator
+  (so `--number-by-section` renders `图1-1` instead of `Figure 1.1`), the delimiter
+  before the caption text (full-width space `　`), and the cleveref prefixes.
+  `auto` (the default) selects Chinese when the document language is `zh-CN` *or* a
+  CJK font is set (`\setCJKmainfont` etc.). Language detection now also recognises
+  ctex (`\documentclass{ctexart|ctexrep|ctexbook}` or `\usepackage{ctex}`) as
+  `zh-CN`, which both drives `auto` and sets Word's proofing language correctly.
+  The underlying Word `SEQ` counter names
+  stay English, so live numbering and `\ref` keep matching. Fine-grained overrides
+  come from `\texwordcaption{key}{value}` directives in the source (values are used
+  verbatim, so surrounding spaces are significant):
+
+  | key | overrides | example value | effect |
+  | --- | --- | --- | --- |
+  | `figurelabel` | figure label word | `图` | `图1-1` |
+  | `tablelabel` | table label word | `表` | `表1-1` |
+  | `equationlabel` | equation label word | `公式` | (used by `\cref`) |
+  | `algorithmlabel` | algorithm label word | `算法` | `算法1-1` |
+  | `labelsep` | gap between label and number | `` (empty) | `图1` vs `Figure 1` |
+  | `sectionsep` | chapter/number separator | `.` | `图1.1` instead of `图1-1` |
+  | `delim` | text before the caption | `：` | `图1-1：说明` |
+  | `eqopen` / `eqclose` | equation parentheses | `（` / `）` | `（1-1）` |
+
+  ```latex
+  % make a zh-CN document number figures 图1.1 (dot) and use a Chinese colon:
+  \texwordcaption{sectionsep}{.}
+  \texwordcaption{delim}{：}
+  % full-width parentheses for equation numbers:
+  \texwordcaption{eqopen}{（}\texwordcaption{eqclose}{）}
+  ```
+
+  Under pdfLaTeX add `\providecommand{\texwordcaption}[2]{}` so the directive is a
+  no-op there (same as `\texwordstyle`). Convert with `--number-by-section` to get
+  the `N-M` / `N.M` chapter-numbered form.
+- **`\texwordstyle` now styles table text and three-line tables (三线表).** Two new
+  roles: `\texwordstyle{table}{…}` sets the paragraph style of the text inside every
+  table cell (previously hardcoded to `Normal`), so cell text need not be `Normal`;
+  and `\texwordstyle{threelinetable}{…}` names a Word *table* style that is applied
+  to any tabular whose first command is `\toprule` (a booktabs three-line table).
+  When that role is bound, the matching table adopts the named table style and we
+  drop our default full-grid borders so the template's three-line border format
+  takes effect; tabulars that are not three-line tables, or when the role is left
+  unbound, keep the existing full grid. Both names resolve against the
+  `--reference-doc` template and fall back (to `Normal` / no table style) when unbound.
+- **`--reference-doc` now adopts the template's list numbering.** Previously only
+  `styles.xml`, the theme, page geometry and headers/footers were lifted from a
+  reference template, while list/heading numbering kept tex2word's built-in
+  scheme — so a template's custom multilevel list (多级列表) and bullet/numbered
+  list formats were ignored. We now carry the template's `numbering.xml`, detect
+  its bullet list, ordered list and heading-linked multilevel list, and remap our
+  fixed bullet/decimal/heading numIds onto them (each falling back to the bundled
+  definition when the template lacks that role). Heading-linked levels keep their
+  `w:pStyle` binding across the styleId normalization.
+- **`\texwordstyle{role}{Word style name}` binds appendix/part to template styles.**
+  Appendix headings and `\part` have no distinguishing marker for auto-detection,
+  so a new source directive maps them explicitly: `\texwordstyle{appendix1}{附录一}`
+  ..`{appendix4}{…}` and `\texwordstyle{part}{…}`. The named style is resolved
+  against the `--reference-doc` template (by display name, not a hardcoded id);
+  matching appendix/`\part` headings then adopt that paragraph style, and their
+  numbering (numId 4/5) points at the multilevel list the template links to it.
+  Unresolved names warn and fall back to the built-in Heading style + numbering.
+- **`\texwordstyle` also styles figures and captions.** `\texwordstyle{figure}{…}`
+  sets the paragraph style of the line that holds an inserted image (including
+  rendered TikZ and sub-figure images). `\texwordstyle{caption}{…}` sets the
+  default caption style, overridable per type by `figurecaption`, `tablecaption`,
+  `subfigurecaption` and `algorithmcaption`. All resolve the named style against
+  the `--reference-doc` template and fall back to `Normal` / `Caption` when unbound.
+- **`\texwordstyle` covers the common paragraph styles, with name auto-discovery.**
+  `title`, `subtitle`, `abstract`, `sourcecode`, `quote`, `bibliography` and
+  `footnote` can now be rebound too. And the default behaviour changed: when a role
+  is left *unbound*, tex2word first looks for a style of that name in the
+  `--reference-doc` template and adopts it, only falling back to the bundled
+  built-in style if none is found — so e.g. a template's own `Abstract` or
+  `Source Code` paragraph style is now picked up automatically, without a directive.
+  Name resolution follows the styleId normalization the styles merge applies, so a
+  discovered id is always valid in the merged styles.
+
+  **All `\texwordstyle` roles**
+
+  | role | styles | bound via |
+  | --- | --- | --- |
+  | `appendix1`..`appendix4` | appendix heading levels 1–4 (style + linked numbering) | explicit only |
+  | `part` | `\part` heading (style + linked numbering) | explicit only |
+  | `figure` | the paragraph holding an inserted image / TikZ / sub-figure image | explicit only |
+  | `caption` | default caption style for all caption kinds | explicit only |
+  | `figurecaption` | figure captions (overrides `caption`) | explicit only |
+  | `tablecaption` | table captions (overrides `caption`) | explicit only |
+  | `subfigurecaption` | sub-figure `(a)`/`(b)` captions (overrides `caption`) | explicit only |
+  | `algorithmcaption` | algorithm captions (overrides `caption`) | explicit only |
+  | `title` | document title | explicit or name auto-discovery |
+  | `subtitle` | author / affiliation / date lines | explicit or name auto-discovery |
+  | `abstract` | abstract + keywords paragraphs | explicit or name auto-discovery |
+  | `sourcecode` | verbatim / listings / inline code blocks | explicit or name auto-discovery |
+  | `quote` | quote / quotation blocks | explicit or name auto-discovery |
+  | `bibliography` | reference-list entries | explicit or name auto-discovery |
+  | `footnote` | footnote / endnote text | explicit or name auto-discovery |
+  | `body` | ordinary body-text (正文) paragraphs (default `Normal`) | explicit only |
+  | `table` | text inside table cells (default `Normal`) | explicit only |
+  | `threelinetable` | Word *table* style for a 三线表 (tabular whose first command is `\toprule`) | explicit only |
+
+  Add `\providecommand{\texwordstyle}[2]{}` so pdflatex ignores the directive.
+
 ## 1.0.5 — TikZ preamble fix
 
 - **TikZ compile no longer broken by a multi-line preamble macro.** The

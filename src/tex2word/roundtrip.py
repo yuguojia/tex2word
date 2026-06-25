@@ -259,7 +259,7 @@ def reconcile_blocks(original: list[ir.Block], current: list[ir.Block]) -> list[
 
 # inline nodes whose exact manifest form we preserve and which inject no prose of
 # their own when rendered (so prose segments line up across manifest / read-back).
-_MERGE_SEMANTIC = (ir.Math, ir.Footnote, ir.Endnote, ir.Image)
+_MERGE_SEMANTIC = (ir.Math, ir.DisplayMath, ir.Footnote, ir.Endnote, ir.Image)
 # inline nodes whose rendering injects prose (cite "[1]", cref "alg. ") or is
 # otherwise unmergeable -> keep the whole manifest paragraph.
 _INLINE_OPAQUE = (ir.Cite, ir.Ref, ir.RawInline)
@@ -323,13 +323,16 @@ def _split_semantic(inlines: list) -> tuple[list[list], list]:
 def _sem_key(n) -> tuple:
     if isinstance(n, ir.Math):
         return ("math", _math_sig(n.latex))
+    if isinstance(n, ir.DisplayMath):
+        return ("dmath", _math_sig(n.latex))
     if isinstance(n, ir.Image):
         return ("img", n.path)
     return ("fn", _norm(_prose_text(n.inlines)))  # Footnote
 
 
 _UNRELIABLE = (
-    ir.Math, ir.Cite, ir.Ref, ir.Footnote, ir.Endnote, ir.Image, ir.RawInline, ir.IndexEntry,
+    ir.Math, ir.DisplayMath, ir.Cite, ir.Ref, ir.Footnote, ir.Endnote, ir.Image,
+    ir.RawInline, ir.IndexEntry,
 )
 
 

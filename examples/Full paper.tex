@@ -1,0 +1,68 @@
+\documentclass{ctexart}
+\providecommand{\texwordstyle}[2]{}
+\texwordstyle{figure}{图片}
+\texwordstyle{figurecaption}{图注}
+\texwordstyle{tablecaption}{表注}
+\texwordstyle{threelinetable}{三线表}
+\texwordstyle{abstract}{摘要}
+\texwordstyle{body}{Normal Indent}
+
+\usepackage[backend=biber,style=numeric]{biblatex}
+\addbibresource{refs.bib}
+
+
+
+\title{基于深度学习的中文文本情感分析方法研究}
+\author{作者}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+随着社交媒体的快速发展，中文文本情感分析在舆情监控、产品评价等领域具有重要的应用价值。
+本文提出一种结合预训练语言模型与注意力机制的情感分类方法。实验在公开数据集上进行，
+结果表明所提方法在准确率和召回率上均优于传统的基线模型，验证了其有效性与可行性。
+\end{abstract}
+
+\noindent\textbf{关键词：}情感分析；深度学习；预训练模型；注意力机制
+
+\section{引言}
+
+情感分析是自然语言处理领域的重要研究方向，旨在自动识别文本中所表达的主观情感倾向~\cite{karQuantitativeAnalysisHysteresis2006}。
+近年来，随着深度学习技术的不断进步，基于神经网络的情感分析方法取得了显著进展。
+然而，中文文本由于缺乏天然的词边界、语义复杂等特点，仍然面临诸多挑战。
+
+本文针对中文文本情感分析任务，提出一种融合预训练语言模型与注意力机制的分类框架，
+旨在提升模型对情感语义的理解能力。
+
+\section{相关工作}
+
+早期的情感分析方法主要依赖情感词典与人工设计的特征。随后，机器学习方法如支持向量机、
+朴素贝叶斯等被广泛应用。近年来，循环神经网络与卷积神经网络在该任务上展现出优越性能，
+而以 BERT~\cite{liangEvidencePseudocapacitanceFaradaic2020} 为代表的预训练模型进一步推动了该领域的发展。
+
+\section{方法}
+
+本文方法主要包括三个模块：文本编码层、注意力层与分类层。文本经过预训练模型编码后，
+通过注意力机制~\cite{martinElectronicStructureBasic2020}对关键情感词赋予更高权重，最终由全连接层输出情感类别。
+
+整体损失函数定义为交叉熵损失：
+\begin{equation}
+\mathcal{L} = -\sum_{i=1}^{N} y_i \log \hat{y}_i,
+\end{equation}
+其中 $N$ 为样本数量，$y_i$ 为真实标签，$\hat{y}_i$ 为模型预测概率。
+
+\section{实验与分析}
+
+实验采用公开的中文情感分析数据集，按 8:1:1 的比例划分训练集、验证集与测试集。
+评价指标包括准确率、精确率、召回率与 F1 值。实验结果表明，本文方法相较于基线模型
+在各项指标上均有提升。
+
+\section{结论}
+
+本文提出了一种结合预训练模型与注意力机制的中文文本情感分析方法，
+实验验证了其有效性。未来工作将进一步探索多模态信息融合，以提升模型的泛化能力。
+
+\printbibliography
+
+
+\end{document}

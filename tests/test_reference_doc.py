@@ -6,7 +6,14 @@ import io
 import zipfile
 
 from tex2word import convert_source
-from tex2word.templates.reference import extract_reference, merge_styles
+from tex2word.backend.numbering import reference_numbering
+from tex2word.templates.reference import (
+    extract_reference,
+    merge_notes,
+    merge_settings,
+    merge_styles,
+)
+from tex2word.templates.reference import _separator_notes
 
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -17,6 +24,15 @@ _REF_STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>
     <w:rPr><w:color w:val="FF0000"/><w:sz w:val="48"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/></w:style>
+  <w:style w:type="paragraph" w:styleId="ap1"><w:name w:val="附录1"/></w:style>
+  <w:style w:type="paragraph" w:styleId="ap2"><w:name w:val="附录2"/></w:style>
+  <w:style w:type="paragraph" w:styleId="pt"><w:name w:val="部分标题"/></w:style>
+  <w:style w:type="paragraph" w:styleId="fig"><w:name w:val="图"/></w:style>
+  <w:style w:type="paragraph" w:styleId="cap"><w:name w:val="图注"/></w:style>
+  <w:style w:type="paragraph" w:styleId="tcap"><w:name w:val="表注"/></w:style>
+  <w:style w:type="paragraph" w:styleId="abs"><w:name w:val="Abstract"/></w:style>
+  <w:style w:type="paragraph" w:styleId="code"><w:name w:val="Source Code"/></w:style>
+  <w:style w:type="paragraph" w:styleId="ni"><w:name w:val="正文缩进"/></w:style>
 </w:styles>""".encode()
 
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -72,12 +88,89 @@ _REF_THEME = (
     b'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="t"/>'
 )
 
+# A template numbering part: a bullet list (en-dash), an ordered list ("1)"),
+# and a heading-linked multilevel list (Chinese counting at the top level).
+_REF_NUMBERING = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="{_W}">
+  <w:abstractNum w:abstractNumId="7">
+    <w:multiLevelType w:val="hybridMultilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="&#8211;"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="8">
+    <w:multiLevelType w:val="hybridMultilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1)"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="9">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="chineseCounting"/><w:lvlText w:val="%1"/>
+      <w:pStyle w:val="Heading1"/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/>
+      <w:pStyle w:val="Heading2"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="10">
+    <w:multiLevelType w:val="multilevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="upperLetter"/><w:lvlText w:val="附录%1"/>
+      <w:pStyle w:val="ap1"/></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1.%2"/>
+      <w:pStyle w:val="ap2"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="11">
+    <w:multiLevelType w:val="singleLevel"/>
+    <w:lvl w:ilvl="0"><w:numFmt w:val="upperRoman"/><w:lvlText w:val="第%1部分"/>
+      <w:pStyle w:val="pt"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="3"><w:abstractNumId w:val="9"/></w:num>
+  <w:num w:numId="42"><w:abstractNumId w:val="7"/></w:num>
+</w:numbering>""".encode()
 
-def _reference_docx(with_theme: bool = True, with_headers: bool = True) -> bytes:
+
+# A settings.xml exercising: an advanced/compat option (doNotExpandShiftReturn),
+# a relationship-bearing element (attachedTemplate) and protection -- the latter
+# two must be stripped, the compat option preserved.
+_REF_SETTINGS = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="{_W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:writeProtection w:recommended="1"/>
+  <w:attachedTemplate r:id="rId1"/>
+  <w:defaultTabStop w:val="480"/>
+  <w:characterSpacingControl w:val="compressPunctuation"/>
+  <w:documentProtection w:edit="readOnly" w:enforcement="1"/>
+  <w:footnotePr><w:numFmt w:val="decimalEnclosedCircleChinese"/>
+    <w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>
+  <w:endnotePr><w:endnote w:id="-1"/><w:endnote w:id="0"/></w:endnotePr>
+  <w:compat><w:doNotExpandShiftReturn/></w:compat>
+</w:settings>""".encode()
+
+# A footnotes part like a real template's: the separator/continuation notes plus
+# a *content* note (id 1) from the template's own body carrying a relationship --
+# only the separators should be carried (content + its rels must be dropped).
+_REF_FOOTNOTES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="{_W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+  <w:footnote w:id="1"><w:p><w:hyperlink r:id="rIdX"><w:r><w:t>template note</w:t></w:r></w:hyperlink></w:p></w:footnote>
+</w:footnotes>""".encode()
+
+_REF_ENDNOTES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:endnotes xmlns:w="{_W}">
+  <w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>
+  <w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>
+</w:endnotes>""".encode()
+
+
+def _reference_docx(
+    with_theme: bool = True, with_headers: bool = True, with_numbering: bool = True,
+    with_settings: bool = False,
+) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("word/styles.xml", _REF_STYLES)
         z.writestr("word/document.xml", _REF_DOC)
+        if with_settings:
+            z.writestr("word/settings.xml", _REF_SETTINGS)
+            z.writestr("word/footnotes.xml", _REF_FOOTNOTES)
+            z.writestr("word/endnotes.xml", _REF_ENDNOTES)
+        if with_numbering:
+            z.writestr("word/numbering.xml", _REF_NUMBERING)
         if with_theme:
             z.writestr("word/theme/theme1.xml", _REF_THEME)
         if with_headers:
@@ -117,6 +210,28 @@ def test_merge_keeps_reference_styles_and_adds_ours():
     assert 'w:styleId="Caption"' in merged
 
 
+def test_merge_remaps_localized_builtin_styleids():
+    # a Chinese-Word template: built-in styles under localized/short styleIds,
+    # with their English built-in names in w:name (as Word actually saves them).
+    localized = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{_W}">
+  <w:style w:type="paragraph" w:styleId="a"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="1"><w:name w:val="heading 1"/>
+    <w:rPr><w:color w:val="00FF00"/></w:rPr></w:style>
+  <w:style w:type="character" w:styleId="10"><w:name w:val="heading 1 char"/>
+    <w:link w:val="1"/></w:style>
+</w:styles>""".encode()
+    from tex2word.templates import load_styles_xml
+
+    merged = merge_styles(localized, load_styles_xml()).decode()
+    # the template's heading 1 is now reachable under the id our body emits, and
+    # its formatting (green) wins over our bundled Heading1.
+    assert 'w:styleId="Heading1"' in merged and 'w:val="00FF00"' in merged
+    assert 'w:styleId="a"' not in merged  # the localized Normal id was rewritten
+    # intra-styles references (w:link) follow the rename, so nothing dangles.
+    assert 'w:link w:val="Heading1"' in merged
+
+
 # -- end-to-end through the pipeline ----------------------------------------- #
 
 
@@ -145,6 +260,97 @@ def test_no_reference_uses_builtin_letter(tmp_path):
     src = r"\begin{document}\section{S}x\end{document}"
     doc = _part(convert_source(src).docx, "word/document.xml").decode()
     assert 'w:w="12240"' in doc  # the built-in Letter default, unchanged
+
+
+# -- settings.xml carry-over (advanced/compatibility options) ---------------- #
+
+
+def test_merge_settings_keeps_compat_and_note_format_drops_unsafe():
+    out = merge_settings(_REF_SETTINGS)
+    assert b"doNotExpandShiftReturn" in out  # advanced/compat option preserved
+    assert b"characterSpacingControl" in out and b"defaultTabStop" in out
+    assert b"decimalEnclosedCircleChinese" in out  # footnote number format preserved
+    assert b"<w:footnote " in out  # separator references kept (parts are carried now)
+    assert b"attachedTemplate" not in out  # relationship-bearing -> stripped
+    assert b"Protection" not in out  # write/document protection -> stripped
+    assert b"updateFields" in out  # our field-refresh setting (re)inserted
+
+
+def test_separator_notes_keeps_only_separators():
+    out = _separator_notes(_REF_FOOTNOTES, "footnote")
+    import lxml.etree as ET
+
+    root = ET.fromstring(out)
+    ids = [c.get(f"{{{_W}}}id") for c in root]
+    assert ids == ["-1", "0"]  # content note id=1 dropped
+    assert b"hyperlink" not in out and b"rIdX" not in out  # its relationship gone
+
+
+def test_separator_notes_returns_none_without_separators():
+    only_content = f'<w:footnotes xmlns:w="{_W}"><w:footnote w:id="1"/></w:footnotes>'.encode()
+    assert _separator_notes(only_content, "footnote") is None
+
+
+def test_merge_notes_combines_template_separators_with_content():
+    generated = (
+        f'<w:footnotes xmlns:w="{_W}">'
+        f'<w:footnote w:type="separator" w:id="-1"/>'
+        f'<w:footnote w:type="continuationSeparator" w:id="0"/>'
+        f'<w:footnote w:id="1"><w:p/></w:footnote></w:footnotes>'
+    ).encode()
+    seps = _separator_notes(_REF_FOOTNOTES, "footnote")
+    import lxml.etree as ET
+
+    root = ET.fromstring(merge_notes(seps, generated))
+    ids = [(c.get(f"{{{_W}}}type"), c.get(f"{{{_W}}}id")) for c in root]
+    assert ids == [("separator", "-1"), ("continuationSeparator", "0"), (None, "1")]
+
+
+def test_reference_notes_carried_when_doc_has_no_notes(tmp_path):
+    # regression: a template whose settings.xml references note separators must get
+    # its footnotes.xml/endnotes.xml carried (separators only), so the references
+    # resolve and Word doesn't report unreadable footnote/endnote content.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx(with_settings=True))
+    src = r"\begin{document}\section{S}no notes here\end{document}"
+    docx = convert_source(src, reference_doc=str(ref)).docx
+    names = set(zipfile.ZipFile(io.BytesIO(docx)).namelist())
+    assert "word/footnotes.xml" in names and "word/endnotes.xml" in names
+    footnotes = _part(docx, "word/footnotes.xml")
+    assert b'w:type="separator"' in footnotes  # the template separators are present
+    assert b"template note" not in footnotes  # the template's content note is not
+
+
+def test_merge_settings_orders_updatefields_before_compat():
+    import lxml.etree as ET
+
+    root = ET.fromstring(merge_settings(_REF_SETTINGS))
+    kids = [ET.QName(c).localname for c in root if isinstance(c.tag, str)]
+    assert kids.index("updateFields") < kids.index("compat")  # ECMA-376 order
+
+
+def test_reference_settings_carried_into_output(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx(with_settings=True))
+    src = r"\begin{document}\section{S}x\end{document}"
+    settings = _part(convert_source(src, reference_doc=str(ref)).docx, "word/settings.xml")
+    assert b"doNotExpandShiftReturn" in settings  # template's advanced option survives
+    assert b"updateFields" in settings
+
+
+def test_no_reference_uses_builtin_settings(tmp_path):
+    src = r"\begin{document}\section{S}x\end{document}"
+    settings = _part(convert_source(src).docx, "word/settings.xml").decode()
+    assert "updateFields" in settings and "compat" not in settings
+
+
+def test_output_with_carried_settings_is_valid(tmp_path):
+    from tex2word.validate import validate_docx
+
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx(with_settings=True))
+    src = r"\begin{document}\section{S}x\end{document}"
+    assert validate_docx(convert_source(src, reference_doc=str(ref)).docx) == []
 
 
 def test_output_with_reference_is_valid(tmp_path):
@@ -221,3 +427,287 @@ def test_output_with_headers_is_valid(tmp_path):
     from tex2word.validate import validate_docx
 
     assert validate_docx(_convert_with_reference(tmp_path)) == []
+
+
+# -- numbering (multilevel + item lists) ------------------------------------- #
+
+
+def _num_for(numbering_xml: str, num_id: str) -> str:
+    """The abstractNumId a given w:num points at, from a numbering.xml string."""
+    import re
+
+    m = re.search(
+        rf'<w:num w:numId="{num_id}"[^>]*>\s*<w:abstractNumId w:val="(\d+)"',
+        numbering_xml,
+    )
+    assert m, f"no w:num {num_id} in numbering"
+    return m.group(1)
+
+
+# the template's highest numId is 42, so our role numIds land at the 1000 floor.
+_B = 1000  # bullet; +1 decimal, +2 heading, +3 appendix, +4 part
+
+
+def test_reference_numbering_remaps_our_numids(tmp_path):
+    nbr = _part(_convert_with_reference(tmp_path), "word/numbering.xml").decode()
+    # our role numIds (shifted clear of the template) point at its own abstractNums:
+    assert _num_for(nbr, str(_B)) == "7"      # bullet -> template's en-dash list
+    assert _num_for(nbr, str(_B + 1)) == "8"  # decimal -> template's "1)" ordered list
+    assert _num_for(nbr, str(_B + 2)) == "9"  # headings -> template's chineseCounting list
+    # the template's level formats are carried verbatim
+    assert "chineseCounting" in nbr and "%1)" in nbr
+
+
+def test_reference_numbering_keeps_template_numids(tmp_path):
+    import re
+
+    nbr = _part(_convert_with_reference(tmp_path), "word/numbering.xml").decode()
+    ids = sorted(int(i) for i in re.findall(r'<w:num w:numId="(\d+)"', nbr))
+    # the template's own w:num (3, 42) are carried verbatim, plus our five roles
+    assert ids == [3, 42, _B, _B + 1, _B + 2, _B + 3, _B + 4]
+
+
+def test_reference_numbering_falls_back_per_role(tmp_path):
+    # a template whose numbering defines ONLY a bullet list: bullet adopts it,
+    # but decimal/heading/appendix/part fall back to our bundled definitions.
+    nbr = _part(
+        _convert_with_reference(tmp_path, with_numbering=False), "word/numbering.xml"
+    ).decode()
+    # no template numbering at all -> our built-in part (default numIds 1-5) is used
+    assert _num_for(nbr, "3") in {"2"}  # our heading abstractNum
+    assert "Heading1" in nbr
+
+
+def test_numbering_heading_link_survives_localized_styleids():
+    # a Chinese template: heading 1 saved under styleId "1"; its multilevel list
+    # links levels to "1"/"2". The pStyle refs must be rewritten to Heading1/2.
+    localized_styles = f"""<?xml version="1.0"?><w:styles xmlns:w="{_W}">
+      <w:style w:type="paragraph" w:styleId="1"><w:name w:val="heading 1"/></w:style>
+      <w:style w:type="paragraph" w:styleId="2"><w:name w:val="heading 2"/></w:style>
+    </w:styles>"""
+    ref_numbering = f"""<?xml version="1.0"?><w:numbering xmlns:w="{_W}">
+      <w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="multilevel"/>
+        <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:pStyle w:val="1"/></w:lvl>
+        <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:pStyle w:val="2"/></w:lvl>
+      </w:abstractNum></w:numbering>""".encode()
+    from tex2word.templates.reference import _compute_builtin_rename
+    from lxml import etree
+
+    from tex2word.backend.numbering import reference_num_ids
+
+    rename = _compute_builtin_rename(etree.fromstring(localized_styles.encode()))
+    num_ids = reference_num_ids(ref_numbering)  # no template w:num -> floor at 1000
+    out = reference_numbering(ref_numbering, rename, num_ids).decode()
+    assert 'w:pStyle w:val="Heading1"' in out  # rewritten from "1"
+    assert 'w:pStyle w:val="Heading2"' in out  # rewritten from "2"
+    assert _num_for(out, str(num_ids.heading)) == "0"  # headings bind to template list
+
+
+def test_carried_heading_style_keeps_its_template_numbering(tmp_path):
+    # a template whose heading 1 style carries its OWN numId for a "第%1章" list:
+    # the template's numbering is carried verbatim, so the style's numId stays
+    # valid and the chapter numbering survives without any relinking.
+    import re
+
+    from lxml import etree
+
+    styles = _REF_STYLES.replace(
+        b'<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>',
+        b'<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>'
+        b'<w:pPr><w:numPr><w:numId w:val="3"/></w:numPr></w:pPr>',
+    )
+    ref = tmp_path / "template.docx"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/document.xml", _REF_DOC)
+        z.writestr("word/numbering.xml", _REF_NUMBERING)
+    ref.write_bytes(buf.getvalue())
+
+    docx = convert_source(
+        r"\begin{document}\section{Intro}Body.\end{document}", reference_doc=str(ref)
+    ).docx
+    st = etree.fromstring(_part(docx, "word/styles.xml"))
+    nbr = _part(docx, "word/numbering.xml").decode()
+    h1 = next(s for s in st.findall(f"{{{_W}}}style")
+              if s.get(f"{{{_W}}}styleId") == "Heading1")
+    num_id = h1.find(f"{{{_W}}}pPr/{{{_W}}}numPr/{{{_W}}}numId").get(f"{{{_W}}}val")
+    assert num_id == "3"  # the style keeps the template's own numId, untouched
+    assert _num_for(nbr, "3") == "9"  # which still resolves (carried verbatim)
+
+
+def test_extract_reference_reads_numbering():
+    ref = extract_reference(_reference_docx())
+    assert ref.raw_numbering is not None
+    assert b"chineseCounting" in ref.raw_numbering
+    # the name->styleId map resolves \texwordstyle's display names
+    assert ref.style_name_to_id.get("附录1") == "ap1"
+    assert ref.style_name_to_id.get("部分标题") == "pt"
+
+
+# -- \texwordstyle: appendix / part binding ---------------------------------- #
+
+
+def _convert_appendix(tmp_path) -> bytes:
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{appendix1}{附录1}"
+        r"\texwordstyle{appendix2}{附录2}"
+        r"\texwordstyle{part}{部分标题}"
+        r"\begin{document}"
+        r"\part{First Part}"
+        r"\section{Body}text."
+        r"\appendix\section{Extra}\subsection{Detail}"
+        r"\end{document}"
+    )
+    return convert_source(src, reference_doc=str(ref)).docx
+
+
+def test_appendix_and_part_numbering_follow_template(tmp_path):
+    nbr = _part(_convert_appendix(tmp_path), "word/numbering.xml").decode()
+    assert _num_for(nbr, str(_B + 3)) == "10"  # appendix -> template's 附录 list
+    assert _num_for(nbr, str(_B + 4)) == "11"  # \part -> template's 第N部分 list
+    assert "附录%1" in nbr and "第%1部分" in nbr
+
+
+def test_appendix_and_part_paragraphs_use_template_styles(tmp_path):
+    doc = _part(_convert_appendix(tmp_path), "word/document.xml").decode()
+    # the appendix \section adopts the bound 附录1 style (styleId ap1), \part the
+    # 部分标题 style (pt) -- while the non-appendix \section stays Heading1.
+    assert 'w:pStyle w:val="ap1"' in doc
+    assert 'w:pStyle w:val="ap2"' in doc  # the appendix \subsection -> level 2
+    assert 'w:pStyle w:val="pt"' in doc
+    assert 'w:pStyle w:val="Heading1"' in doc  # the ordinary section is unchanged
+
+
+def test_unbound_appendix_falls_back_to_builtin(tmp_path):
+    # no \texwordstyle -> appendix/part keep the bundled numbering + Heading styles
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"\begin{document}\appendix\section{Extra}\end{document}"
+    docx = convert_source(src, reference_doc=str(ref)).docx
+    doc = _part(docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Heading1"' in doc and "ap1" not in doc
+
+
+def test_figure_and_caption_styles_follow_texwordstyle(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{figure}{图}"
+        r"\texwordstyle{caption}{图注}"
+        r"\begin{document}"
+        r"\begin{figure}\includegraphics{img.png}\caption{Hi}\end{figure}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="fig"' in doc  # the image line adopts the 图 style
+    assert 'w:pStyle w:val="cap"' in doc  # the caption adopts the 图注 style
+
+
+def test_caption_style_defaults_when_unbound(tmp_path):
+    # without \texwordstyle{caption}, captions keep the built-in Caption style
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"\begin{figure}\includegraphics{img.png}\caption{Hi}\end{figure}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Caption"' in doc and 'w:pStyle w:val="cap"' not in doc
+
+
+def test_per_type_caption_overrides_default(tmp_path):
+    # {caption} sets the default for all; {tablecaption} overrides only tables.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{caption}{图注}"
+        r"\texwordstyle{tablecaption}{表注}"
+        r"\begin{document}"
+        r"\begin{figure}\includegraphics{img.png}\caption{F}\end{figure}"
+        r"\begin{table}\begin{tabular}{c}a\end{tabular}\caption{T}\end{table}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="cap"' in doc   # figure caption -> the 图注 default
+    assert 'w:pStyle w:val="tcap"' in doc  # table caption -> the 表注 override
+    assert 'w:pStyle w:val="Caption"' not in doc  # nothing left on the default
+
+
+def test_generic_paragraph_style_autodiscovered_by_name(tmp_path):
+    # no \texwordstyle: a template style named like the role is found automatically.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"\begin{abstract}Summary.\end{abstract}"
+        r"\begin{verbatim}code here\end{verbatim}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="abs"' in doc   # Abstract found by name (styleId abs)
+    assert 'w:pStyle w:val="code"' in doc  # Source Code found by name (styleId code)
+    assert 'w:pStyle w:val="Abstract"' not in doc  # not the bundled fallback
+
+
+def test_generic_paragraph_style_explicit_binding_wins(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{abstract}{部分标题}"  # bind abstract to an arbitrary style
+        r"\begin{document}\begin{abstract}S.\end{abstract}\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="pt"' in doc  # the bound 部分标题 (styleId pt) wins
+    assert 'w:pStyle w:val="abs"' not in doc
+
+
+def test_body_style_follows_texwordstyle(tmp_path):
+    # \texwordstyle{body} restyles ordinary 正文 paragraphs (default Normal).
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{body}{正文缩进}"
+        r"\begin{document}Body text.\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="ni"' in doc          # 正文缩进 (styleId ni) applied to body
+    assert 'w:pStyle w:val="Normal"' not in doc  # body no longer the bundled Normal
+
+
+def test_body_style_defaults_to_normal_when_unbound(tmp_path):
+    # without \texwordstyle{body}, 正文 keeps the built-in Normal style.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"\begin{document}Body text.\end{document}"
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Normal"' in doc
+    assert 'w:pStyle w:val="ni"' not in doc
+
+
+def test_generic_paragraph_style_falls_back_when_absent(tmp_path):
+    # a template lacking an Abstract-named style -> abstract keeps the bundled style
+    minimal = io.BytesIO()
+    with zipfile.ZipFile(minimal, "w") as z:
+        z.writestr("word/styles.xml", _REF_STYLES.replace(
+            '<w:style w:type="paragraph" w:styleId="abs"><w:name w:val="Abstract"/></w:style>'.encode(),
+            b"",
+        ))
+        z.writestr("word/document.xml", _REF_DOC)
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(minimal.getvalue())
+    src = r"\begin{document}\begin{abstract}S.\end{abstract}\end{document}"
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Abstract"' in doc  # bundled Abstract, no remap
+
+
+def test_texwordstyle_directive_emits_no_body_text(tmp_path):
+    # the directive itself must never leak into the output text
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"\begin{document}\texwordstyle{part}{部分标题}Hello.\end{document}"
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert "texwordstyle" not in doc and "部分标题" not in doc
