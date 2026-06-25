@@ -115,6 +115,33 @@ def validate_docx(docx_bytes: bytes) -> list[str]:
 
     problems += _check_content_types(zf, names)
     problems += _check_relationships(zf, names)
+    problems += _check_note_separator_refs(zf, names)
+    return problems
+
+
+def _check_note_separator_refs(zf: zipfile.ZipFile, names: set[str]) -> list[str]:
+    """settings.xml's footnotePr/endnotePr must not reference a missing notes part.
+
+    A ``<w:footnote w:id="-1"/>`` (separator) inside ``w:footnotePr`` points at a
+    definition in ``word/footnotes.xml``; if that part is absent Word reports
+    unreadable footnote content and offers to repair. Same for endnotes. This is
+    the exact defect a carried ``--reference-doc`` settings.xml can introduce."""
+    if "word/settings.xml" not in names:
+        return []
+    try:
+        root = etree.fromstring(zf.read("word/settings.xml"))
+    except etree.XMLSyntaxError:
+        return []  # malformedness is already reported by the well-formedness pass
+    problems: list[str] = []
+    for pr_tag, ref_tag, part in (
+        ("footnotePr", "footnote", "word/footnotes.xml"),
+        ("endnotePr", "endnote", "word/endnotes.xml"),
+    ):
+        pr = root.find(f"{{{_W}}}{pr_tag}")
+        if pr is not None and pr.find(f"{{{_W}}}{ref_tag}") is not None and part not in names:
+            problems.append(
+                f"word/settings.xml: w:{pr_tag} references a {ref_tag} but {part} is missing"
+            )
     return problems
 
 

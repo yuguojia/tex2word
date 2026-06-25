@@ -56,6 +56,12 @@ class ReferenceParts:
     """Styling parts lifted from a reference ``.docx``."""
 
     styles_xml: bytes  # the reference styles, merged with our required styles
+    settings_xml: bytes | None = None  # template settings.xml (compat/advanced opts) + updateFields
+    footnotes_xml: bytes | None = None  # template footnotes.xml, separator notes only
+    endnotes_xml: bytes | None = None  # template endnotes.xml, separator notes only
+    raw_numbering: bytes | None = None  # the template's word/numbering.xml, if present
+    style_name_to_id: dict[str, str] = field(default_factory=dict)  # w:name -> styleId
+    heading_rename: dict[str, str] = field(default_factory=dict)  # template id -> our id
     theme_xml: bytes | None = None  # word/theme/theme1.xml, if present
     page_pgsz: dict[str, str] | None = None  # body w:pgSz attributes
     page_pgmar: dict[str, str] | None = None  # body w:pgMar attributes
@@ -73,7 +79,24 @@ def extract_reference(docx_bytes: bytes) -> ReferenceParts:
         names = set(zf.namelist())
         if "word/styles.xml" not in names:
             raise ValueError("reference docx has no word/styles.xml")
-        styles = merge_styles(zf.read("word/styles.xml"), load_styles_xml())
+        styles_bytes = zf.read("word/styles.xml")
+        styles = merge_styles(styles_bytes, load_styles_xml())
+        settings = (
+            merge_settings(zf.read("word/settings.xml"))
+            if "word/settings.xml" in names else None
+        )
+        footnotes = (
+            _separator_notes(zf.read("word/footnotes.xml"), "footnote")
+            if "word/footnotes.xml" in names else None
+        )
+        endnotes = (
+            _separator_notes(zf.read("word/endnotes.xml"), "endnote")
+            if "word/endnotes.xml" in names else None
+        )
+        styles_root = etree.fromstring(styles_bytes)
+        heading_rename = _compute_builtin_rename(styles_root)
+        name_to_id = _style_name_to_id(styles_root)
+        raw_numbering = zf.read("word/numbering.xml") if "word/numbering.xml" in names else None
         theme = None
         # the theme part name varies (theme1.xml); take the first under word/theme/
         theme_name = next(
@@ -86,11 +109,18 @@ def extract_reference(docx_bytes: bytes) -> ReferenceParts:
         hfs: list[HeaderFooter] = []
         skipped = 0
         if "word/document.xml" in names:
-            doc_xml = zf.read("word/document.xml")
-            pgsz, pgmar = _page_geometry(doc_xml)
-            hfs, skipped = _headers_footers(doc_xml, zf, names)
-        return ReferenceParts(styles_xml=styles, theme_xml=theme,
-                              page_pgsz=pgsz, page_pgmar=pgmar,
+            body = etree.fromstring(zf.read("word/document.xml")).find(_w("body"))
+            if body is not None:
+                sects = list(body.iter(_w("sectPr")))
+                target = _target_sect_index(body, sects)
+                if target is not None:
+                    pgsz, pgmar = _page_geometry(sects, target)
+                    hfs, skipped = _headers_footers(sects, target, zf, names)
+        return ReferenceParts(styles_xml=styles, settings_xml=settings,
+                              footnotes_xml=footnotes, endnotes_xml=endnotes,
+                              raw_numbering=raw_numbering,
+                              style_name_to_id=name_to_id, heading_rename=heading_rename,
+                              theme_xml=theme, page_pgsz=pgsz, page_pgmar=pgmar,
                               headers_footers=hfs, skipped_header_footers=skipped)
     except ValueError:
         raise
@@ -98,16 +128,110 @@ def extract_reference(docx_bytes: bytes) -> ReferenceParts:
         raise ValueError(f"unreadable reference docx: {exc}") from exc
 
 
+# Word built-in style *names* -> the styleId our writer emits. Word stores a
+# built-in style's English name in ``w:name`` even in localized files, but the
+# styleId is language/version specific: a Chinese template saves ``heading 1``
+# as styleId ``1``, ``Normal`` as ``a``, ``Title`` as ``a8``, ``caption`` as
+# ``a7``, ... Our document body references the canonical English ids, so without
+# remapping a template's built-in definitions would never bind to our content.
+_BUILTIN_NAME_TO_ID = {
+    "normal": "Normal",
+    "title": "Title",
+    "subtitle": "Subtitle",
+    "heading 1": "Heading1",
+    "heading 2": "Heading2",
+    "heading 3": "Heading3",
+    "heading 4": "Heading4",
+    "heading 5": "Heading5",
+    "caption": "Caption",
+    "quote": "Quote",
+    "hyperlink": "Hyperlink",
+    "footnote text": "FootnoteText",
+    "footnote reference": "FootnoteReference",
+    "bibliography": "Bibliography",
+}
+
+
+def _compute_builtin_rename(root: etree._Element) -> dict[str, str]:
+    """{template styleId -> the styleId our writer emits} for built-in styles.
+
+    Match by built-in *name* (``w:name``, recorded in English even in localized
+    templates). Skips remaps that would clobber an id the template already uses
+    for a different style, or collapse two template styles onto the same target.
+    """
+    styles = root.findall(_w("style"))
+    existing = {s.get(_w("styleId")) for s in styles}
+    rename: dict[str, str] = {}
+    for style in styles:
+        old = style.get(_w("styleId"))
+        name_el = style.find(_w("name"))
+        name = name_el.get(_w("val")) if name_el is not None else None
+        if not old or not name:
+            continue
+        target = _BUILTIN_NAME_TO_ID.get(name.strip().lower())
+        if not target or target == old:
+            continue
+        if target in existing or target in rename.values():
+            continue
+        rename[old] = target
+    return rename
+
+
+def _style_name_to_id(root: etree._Element) -> dict[str, str]:
+    """{lower-cased w:name -> styleId} for the template's styles.
+
+    Lets a ``\\texwordstyle{role}{name}`` directive name a style by its display
+    name (what the user sees in Word) and have us resolve it to the styleId the
+    body and numbering reference. Non-built-in styleIds are kept as-is, so a
+    resolved id is valid in both the merged styles and the carried numbering.
+    """
+    out: dict[str, str] = {}
+    for style in root.findall(_w("style")):
+        sid = style.get(_w("styleId"))
+        name_el = style.find(_w("name"))
+        name = name_el.get(_w("val")) if name_el is not None else None
+        if sid and name:
+            out.setdefault(name.strip().lower(), sid)
+    return out
+
+
+def _normalize_builtin_ids(root: etree._Element) -> None:
+    """Rename a template's built-in styles to the styleIds our writer emits.
+
+    Match by built-in *name* (``w:name``, recorded in English even in localized
+    templates) and rewrite the ``w:styleId`` plus every intra-styles reference to
+    it (``basedOn`` / ``next`` / ``link``). This makes a localized or older
+    template's standard styles (``heading 1`` saved as styleId ``1``, ...)
+    actually take effect, instead of our bundled fallbacks being appended under
+    the English ids the body uses.
+    """
+    rename = _compute_builtin_rename(root)
+    if not rename:
+        return
+    styles = root.findall(_w("style"))
+    for style in styles:
+        sid = style.get(_w("styleId"))
+        if sid in rename:
+            style.set(_w("styleId"), rename[sid])
+    ref_tags = {_w("basedOn"), _w("next"), _w("link")}
+    for el in root.iter():
+        if el.tag in ref_tags and el.get(_w("val")) in rename:
+            el.set(_w("val"), rename[el.get(_w("val"))])
+
+
 def merge_styles(reference_styles: bytes, our_styles: bytes) -> bytes:
     """Reference styles, augmented with any of *our* styles it doesn't define.
 
     The reference's definitions of standard ids (``Heading1``, ``Title``, ...)
-    win -- that is the whole point. We only append the custom styles our writer
-    relies on (``SourceCode``, ``Abstract``, ``Bibliography``, ``Hyperlink``,
-    footnote styles, ...) when the template lacks them, so no content renders
-    unstyled.
+    win -- that is the whole point. Built-in styles saved under localized/short
+    styleIds are first normalized to the English ids our writer emits (see
+    :func:`_normalize_builtin_ids`). We then append only the custom styles our
+    writer relies on (``SourceCode``, ``Abstract``, ``Bibliography``,
+    ``Hyperlink``, footnote styles, ...) when the template lacks them, so no
+    content renders unstyled.
     """
     ref_root = etree.fromstring(reference_styles)
+    _normalize_builtin_ids(ref_root)
     have = {
         s.get(_w("styleId"))
         for s in ref_root.findall(_w("style"))
@@ -122,40 +246,224 @@ def merge_styles(reference_styles: bytes, our_styles: bytes) -> bytes:
     return etree.tostring(ref_root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def _headers_footers(
-    document_xml: bytes, zf: zipfile.ZipFile, names: set[str]
-) -> tuple[list[HeaderFooter], int]:
-    """Carry the body sectPr's header/footer parts (with image sub-resources).
+#: ``w:settings`` children that, per ECMA-376 CT_Settings, come at/after the
+#: ``w:updateFields`` slot -- the insertion point for our updateFields element.
+_SETTINGS_AFTER_UPDATEFIELDS = frozenset({
+    "hdrShapeDefaults", "footnotePr", "endnotePr", "compat", "rsids", "mathPr",
+    "uiCompat97To2003", "attachedSchema", "themeFontLang", "clrSchemeMapping",
+    "doNotIncludeSubdocsInStats", "doNotAutoCompressPictures", "forceUpgrade",
+    "captions", "readModeInkLockDown", "smartTagType", "shapeDefaults",
+    "doNotEmbedSmartTags", "decimalSymbol", "listSeparator", "docId",
+    "defaultImageDpi", "chartTrackingRefBased",
+})
+#: settings we drop when carrying a template's settings.xml: relationship-bearing
+#: ``w:attachedTemplate`` (would dangle without settings.xml.rels) and the two
+#: protection elements (would make the output read-only, defeating editable output).
+_DROP_SETTINGS = frozenset({"attachedTemplate", "writeProtection", "documentProtection"})
 
-    Running-title text + page-number fields carry directly; a header/footer that
-    references **images** (a logo) carries its media too (namespaced under
-    ``media/tmpl/`` with the rels rewritten). Anything we can't represent safely
-    (a non-image internal relationship, an unsupported image type, a missing
-    target) is skipped so we never emit a dangling relationship; external (URL)
-    relationships are kept as-is. Returns (carried, skipped_count).
+
+def merge_settings(reference_settings: bytes) -> bytes:
+    """Carry a template's ``settings.xml`` (compat/advanced options) + updateFields.
+
+    This preserves the reference document's advanced/compatibility options -- the
+    ``w:compat`` block (e.g. ``doNotExpandShiftReturn`` -- "don't expand character
+    spacing on a line ended with Shift+Enter"), ``w:characterSpacingControl``,
+    ``w:defaultTabStop``, ``w:mathPr``, kerning/drawing-grid settings, etc.
+
+    We strip elements that would break the output: ``w:attachedTemplate`` and any
+    element bearing a relationship (``r:*``) attribute -- we do not carry
+    ``settings.xml.rels``, so those would dangle -- and ``w:writeProtection`` /
+    ``w:documentProtection``, which would lock the document against editing. We
+    then (re)insert ``w:updateFields`` at its canonical position so Word still
+    recalculates ``SEQ``/``REF`` fields on first open (the live-numbering feature).
     """
-    root = etree.fromstring(document_xml)
-    body = root.find(_w("body"))
-    if body is None:
-        return [], 0
-    sect = next((c for c in reversed(list(body)) if c.tag == _w("sectPr")), None)
-    if sect is None:
+    root = etree.fromstring(reference_settings)
+    for child in list(root):
+        if not isinstance(child.tag, str):
+            continue
+        local = etree.QName(child).localname
+        has_rel_attr = any(etree.QName(a).namespace == _R for a in child.attrib)
+        if local in _DROP_SETTINGS or has_rel_attr or local == "updateFields":
+            root.remove(child)
+    update = etree.Element(_w("updateFields"))
+    update.set(_w("val"), "true")
+    insert_at = len(root)
+    for i, child in enumerate(root):
+        if isinstance(child.tag, str) and etree.QName(child).localname in _SETTINGS_AFTER_UPDATEFIELDS:
+            insert_at = i
+            break
+    root.insert(insert_at, update)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+#: ``w:type`` values of the structural notes (separator / continuation separator /
+#: continuation notice) that every footnotes.xml / endnotes.xml carries -- these,
+#: not the body's content notes, are what ``settings.xml`` references and what
+#: gives the note area its look.
+_SEPARATOR_NOTE_TYPES = frozenset({"separator", "continuationSeparator", "continuationNotice"})
+
+
+def _separator_notes(part_bytes: bytes, note_local: str) -> bytes | None:
+    """A footnotes/endnotes part reduced to its separator notes, or None.
+
+    The reference template's ``footnotes.xml`` also holds the *content* notes of
+    its sample body (ids >= 1), which belong to the document we discard -- and
+    those are what carry hyperlink/image relationships. We keep only the
+    separator / continuation-separator notes (ids -1 / 0), so the carried part is
+    self-contained (no ``.rels``) and free of stray template content. Returns
+    None when the part defines no separator notes.
+    """
+    root = etree.fromstring(part_bytes)
+    type_attr = _w("type")
+    kept = [n for n in root if isinstance(n.tag, str) and n.get(type_attr) in _SEPARATOR_NOTE_TYPES]
+    if not kept:
+        return None
+    for child in list(root):
+        root.remove(child)
+    for note in kept:
+        root.append(note)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+def merge_notes(template_separators: bytes | None, generated: bytes | None) -> bytes | None:
+    """Combine a template's separator notes with tex2word's generated notes part.
+
+    The separator / continuation-separator definitions come from the template
+    (preserving the reference document's note-area look) when it provides them;
+    the actual content notes come from the converted document. Returns:
+
+    * the merged part when the document has notes and the template has separators;
+    * ``generated`` unchanged when the template has none;
+    * the template's separator-only part when the document has no notes (so the
+      ``settings.xml`` footnotePr/endnotePr separator references still resolve);
+    * ``None`` when neither side contributes anything.
+    """
+    if template_separators is None:
+        return generated
+    if generated is None:
+        return template_separators
+    type_attr = _w("type")
+    gen_root = etree.fromstring(generated)
+    tpl_root = etree.fromstring(template_separators)
+    content = [n for n in gen_root if isinstance(n.tag, str)
+               and n.get(type_attr) not in _SEPARATOR_NOTE_TYPES]
+    for child in list(gen_root):
+        gen_root.remove(child)
+    for sep in tpl_root:  # template separators (already separator-only) first
+        gen_root.append(sep)
+    for note in content:  # then the document's content notes
+        gen_root.append(note)
+    return etree.tostring(gen_root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+#: A template author can drop this bookmark on a body paragraph to mark which
+#: page/section's geometry + running headers/footers we should lift. Multi-section
+#: templates (e.g. a thesis template) commonly leave their *final* section -- the
+#: body-level sectPr -- without the running headers/footers the main-text sections
+#: carry, so lifting "the last section" yields none. With the marker present we
+#: lift the marked paragraph's section instead; without it we fall back to the
+#: final section (the historical behaviour).
+_SECTION_MARKER = "tex2word_section"
+
+
+def _target_sect_index(body: etree._Element, sects: list[etree._Element]) -> int | None:
+    """Index into *sects* of the section to lift, or None when there are none.
+
+    Sections appear in document order (paragraph-nested sectPrs first, the
+    body-level final sectPr last). When a paragraph is bookmarked
+    ``tex2word_section`` we return the section that governs it; otherwise the last.
+    """
+    if not sects:
+        return None
+    marked = _marked_sect(body)
+    if marked is not None:
+        try:
+            return sects.index(marked)
+        except ValueError:
+            pass
+    return len(sects) - 1
+
+
+def _marked_sect(body: etree._Element) -> etree._Element | None:
+    """The sectPr governing the paragraph bookmarked ``tex2word_section``, or None.
+
+    A paragraph belongs to the first section whose ``sectPr`` appears at or after
+    it -- a later paragraph's ``pPr/sectPr`` (the section's last paragraph) or, if
+    none follows, the body-level final sectPr. We locate the top-level body block
+    holding the marker, then scan forward for that governing sectPr.
+    """
+    name_attr = _w("name")
+    children = list(body)
+    marked_index = next(
+        (i for i, c in enumerate(children)
+         if any(bm.get(name_attr) == _SECTION_MARKER for bm in c.iter(_w("bookmarkStart")))),
+        None,
+    )
+    if marked_index is None:
+        return None
+    for child in children[marked_index:]:
+        if child.tag == _w("sectPr"):  # the body-level final section
+            return child
+        if child.tag == _w("p"):
+            ppr = child.find(_w("pPr"))
+            sect = ppr.find(_w("sectPr")) if ppr is not None else None
+            if sect is not None:
+                return sect
+    return None
+
+
+def _resolve_hf_refs(
+    sects: list[etree._Element], target: int
+) -> dict[tuple[str, str], str]:
+    """``{(kind, w:type) -> relationship id}`` for the target section.
+
+    Header/footer slots the target section does not state itself are inherited
+    from the nearest preceding section that does, mirroring Word's section
+    inheritance (so a main-text section that only overrides the default header
+    still carries the inherited first/even ones).
+    """
+    rid_attr = f"{{{_R}}}id"
+    resolved: dict[tuple[str, str], str] = {}
+    for sect in reversed(sects[:target + 1]):  # target wins, then nearer predecessors
+        for ref in sect:
+            if ref.tag == _w("headerReference"):
+                kind = "header"
+            elif ref.tag == _w("footerReference"):
+                kind = "footer"
+            else:
+                continue
+            rid = ref.get(rid_attr)
+            if rid:
+                resolved.setdefault((kind, ref.get(_w("type")) or "default"), rid)
+    return resolved
+
+
+def _headers_footers(
+    sects: list[etree._Element], target: int, zf: zipfile.ZipFile, names: set[str]
+) -> tuple[list[HeaderFooter], int]:
+    """Carry the target section's header/footer parts (with image sub-resources).
+
+    The target section is the ``tex2word_section``-marked one (or the final
+    section); references it omits are inherited from earlier sections (see
+    :func:`_resolve_hf_refs`). Running-title text + page-number fields carry
+    directly; a header/footer that references **images** (a logo) carries its
+    media too (namespaced under ``media/tmpl/`` with the rels rewritten).
+    Anything we can't represent safely (a non-image internal relationship, an
+    unsupported image type, a missing target) is skipped so we never emit a
+    dangling relationship; external (URL) relationships are kept as-is. Returns
+    (carried, skipped_count).
+    """
+    refs = _resolve_hf_refs(sects, target)
+    if not refs:
         return [], 0
     rid_target = _rel_targets(zf, names)
-    rid_attr = f"{{{_R}}}id"
     carried: list[HeaderFooter] = []
     skipped = 0
-    for ref in sect:
-        if ref.tag == _w("headerReference"):
-            kind = "header"
-        elif ref.tag == _w("footerReference"):
-            kind = "footer"
-        else:
+    for (kind, w_type), rid in refs.items():
+        target_rel = rid_target.get(rid)
+        if not target_rel:
             continue
-        target = rid_target.get(ref.get(rid_attr) or "")
-        if not target:
-            continue
-        base = target.rsplit("/", 1)[-1]
+        base = target_rel.rsplit("/", 1)[-1]
         part = f"word/{base}"
         if part not in names:
             skipped += 1
@@ -166,7 +474,7 @@ def _headers_footers(
             continue
         rels_bytes, media = sub
         carried.append(HeaderFooter(
-            kind=kind, w_type=ref.get(_w("type")) or "default",
+            kind=kind, w_type=w_type,
             part_name=base, content=zf.read(part),
             rels=rels_bytes or None, media=media,
         ))
@@ -222,16 +530,14 @@ def _rel_targets(zf: zipfile.ZipFile, names: set[str]) -> dict[str, str]:
     return out
 
 
-def _page_geometry(document_xml: bytes) -> tuple[dict[str, str] | None, dict[str, str] | None]:
-    """The body ``w:sectPr`` page size + margins from a document.xml, if present."""
-    root = etree.fromstring(document_xml)
-    body = root.find(_w("body"))
-    if body is None:
-        return None, None
-    # the body-level sectPr is the last direct child of <w:body>.
-    sect = next((c for c in reversed(list(body)) if c.tag == _w("sectPr")), None)
-    if sect is None:
-        return None, None
+def _page_geometry(
+    sects: list[etree._Element], target: int
+) -> tuple[dict[str, str] | None, dict[str, str] | None]:
+    """The target section's page size + margins, inheriting from earlier sections.
+
+    ``w:pgSz`` / ``w:pgMar`` the target section does not state itself are inherited
+    from the nearest preceding section that does (Word's section inheritance).
+    """
 
     def attrs(el: etree._Element | None) -> dict[str, str] | None:
         if el is None:
@@ -241,4 +547,11 @@ def _page_geometry(document_xml: bytes) -> tuple[dict[str, str] | None, dict[str
             for k, v in el.attrib.items()
         }
 
-    return attrs(sect.find(_w("pgSz"))), attrs(sect.find(_w("pgMar")))
+    def inherit(local: str) -> etree._Element | None:
+        for sect in reversed(sects[:target + 1]):
+            el = sect.find(_w(local))
+            if el is not None:
+                return el
+        return None
+
+    return attrs(inherit("pgSz")), attrs(inherit("pgMar"))

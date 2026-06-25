@@ -73,6 +73,25 @@ SYMBOLS: dict[str, str] = {
     "lbrace": "{", "rbrace": "}", "vert": "|", "Vert": "‖",
 }
 
+# upgreek package: upright Greek letters. ``\uppi`` -> upright π, ``\Uppi`` -> Π.
+# Derived from SYMBOLS so the glyphs stay in one place; only genuine Greek bases
+# are listed so we never intercept lookalikes such as ``\updownarrow``.
+_UPGREEK_LOWER = (
+    "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta",
+    "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "pi",
+    "varpi", "rho", "varrho", "sigma", "varsigma", "tau", "upsilon", "phi",
+    "varphi", "chi", "psi", "omega",
+)
+# upgreek spells uppercase as \Up + lowercase name: \Uppi -> Π, \Upomega -> Ω.
+_UPGREEK_UPPER = (
+    "gamma", "delta", "theta", "lambda", "xi", "pi", "sigma", "upsilon",
+    "phi", "psi", "omega",
+)
+UPGREEK: dict[str, str] = {
+    **{f"up{g}": SYMBOLS[g] for g in _UPGREEK_LOWER},
+    **{f"Up{g}": SYMBOLS[g.capitalize()] for g in _UPGREEK_UPPER},
+}
+
 # n-ary / big operators (rendered with limits via OMML m:nary).
 NARY: dict[str, str] = {
     "sum": "∑", "prod": "∏", "coprod": "∐",

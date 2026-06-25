@@ -127,7 +127,8 @@ def _parse_run(e: etree._Element) -> L.Lit:
     t = e.find(_mq("t"))
     text = t.text if t is not None and t.text is not None else ""
     rpr = e.find(_mq("rPr"))
-    upright = rpr is not None and rpr.find(_mq("nor")) is not None
+    text_mode = rpr is not None and rpr.find(_mq("nor")) is not None
+    upright = text_mode
     script = None
     bold = False
     if rpr is not None:
@@ -135,9 +136,12 @@ def _parse_run(e: etree._Element) -> L.Lit:
         if scr is not None:
             script = scr.get(f"{{{_M}}}val")
         sty = rpr.find(_mq("sty"))
-        if sty is not None and sty.get(f"{{{_M}}}val") in ("b", "bi"):
+        sty_val = sty.get(f"{{{_M}}}val") if sty is not None else None
+        if sty_val in ("b", "bi"):
             bold = True
-    return L.Lit(text, upright=upright, bold=bold, script=script)
+        if sty_val == "p" and script is None:  # math "plain" -> upright math
+            upright = True
+    return L.Lit(text, upright=upright, bold=bold, script=script, text_mode=text_mode)
 
 
 # --------------------------------------------------------------------------- #

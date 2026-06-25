@@ -52,6 +52,16 @@ def test_no_language_leaves_styles_lang_free():
     assert "w:lang" not in styles
 
 
+def test_east_asian_language_goes_to_eastasia_not_val():
+    # zh-CN must land on w:eastAsia, leaving w:val a Latin language -- otherwise
+    # Word renders ASCII runs in the East-Asian font (English shows up as 宋体).
+    src = r"\documentclass{ctexart}\begin{document}English 123\end{document}"
+    styles = _styles(convert_source(src).docx)
+    assert 'w:eastAsia="zh-CN"' in styles
+    assert 'w:val="zh-CN"' not in styles
+    assert 'w:val="en-US"' in styles
+
+
 def test_language_round_trips_as_babel():
     src = r"\documentclass{article}\usepackage[ngerman]{babel}\begin{document}x\end{document}"
     latex = to_latex(convert_source(src).docx)

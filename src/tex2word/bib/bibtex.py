@@ -40,7 +40,10 @@ _TYPE_MAP = {
 _FIELD_MAP = {
     "title": "title",
     "journal": "container-title",
+    "journaltitle": "container-title",  # biblatex (e.g. Zotero export)
+    "shortjournal": "container-title-short",  # biblatex
     "booktitle": "container-title",
+    "shorttitle": "title-short",  # biblatex
     "publisher": "publisher",
     "school": "publisher",
     "institution": "publisher",

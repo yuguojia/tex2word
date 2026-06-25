@@ -59,6 +59,33 @@ def test_zotero_bibliography_field(tmp_path):
     assert any("ZOTERO_BIBL" in i and "CSL_BIBLIOGRAPHY" in i for i in _instrs(result.docx))
 
 
+def test_zotero_bibliography_field_wraps_entries(tmp_path):
+    # The reference list must sit *inside* the CSL_BIBLIOGRAPHY field (between
+    # its fldChar separate and end), not as plain paragraphs after a closed,
+    # empty field -- otherwise a Zotero refresh duplicates the list and Word's
+    # "update field" has nothing to recompute in place.
+    result = _convert(r"\citep{e1905} and \citet{k1984}.", tmp_path, "zotero")
+    root = document_root(result.docx)
+    # Walk the document order of the bibliography field markers and reference text.
+    seq: list[str] = []
+    for el in root.iter():
+        tag = el.tag.split("}", 1)[-1]
+        if tag == "fldChar":
+            seq.append("fld:" + el.get(f"{{{NS['w']}}}fldCharType"))
+        elif tag == "instrText" and "ZOTERO_BIBL" in (el.text or ""):
+            seq.append("bibl")
+        elif tag == "t" and "Knuth" in (el.text or ""):
+            seq.append("ref")
+    # find the bibl instruction, its separate, the reference, then the end
+    i = seq.index("bibl")
+    after = seq[i:]
+    assert "fld:separate" in after, after
+    sep = after.index("fld:separate")
+    end = after.index("fld:end")
+    ref = after.index("ref")
+    assert sep < ref < end, after  # reference is wrapped by separate..end
+
+
 def test_zotero_cached_text_matches_static(tmp_path):
     # the field's cached result should be the same formatted text as static mode
     static = _convert(r"\citet{k1984}.", tmp_path, "static")

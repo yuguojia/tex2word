@@ -267,6 +267,8 @@ class LatexWriter:
         star = "" if block.caption_numbered else "*"
         cap = f"\\caption{star}{{{self._inlines(block.caption or [])}}}"
         label = f"\\label{{{block.label}}}" if block.label else ""
+        if block.caption_above:
+            return f"\\begin{{table}}\n\\centering\n{cap}{label}\n{table}\n\\end{{table}}"
         return f"\\begin{{table}}\n\\centering\n{table}\n{cap}{label}\n\\end{{table}}"
 
     def _cell(self, cell: ir.TableCell) -> str:
@@ -282,22 +284,32 @@ class LatexWriter:
 
     def _figure(self, block: ir.Figure) -> str:
         lines = ["\\begin{figure}", "\\centering"]
+        cap_lines: list[str] = []
+        if block.caption:
+            star = "" if block.caption_numbered else "*"
+            cap_lines.append(f"\\caption{star}{{{self._inlines(block.caption)}}}")
+        if block.label:
+            cap_lines.append(f"\\label{{{block.label}}}")
+        if block.caption_above:
+            lines.extend(cap_lines)
         if block.image is not None:
             lines.append(f"\\includegraphics{{{block.image.path}}}")
         for sub in block.subfigures:
             lines.append("\\begin{subfigure}{0.45\\linewidth}")
+            sub_cap: list[str] = []
+            if sub.caption:
+                sub_cap.append(f"\\caption{{{self._inlines(sub.caption)}}}")
+            if sub.label:
+                sub_cap.append(f"\\label{{{sub.label}}}")
+            if sub.caption_above:
+                lines.extend(sub_cap)
             if sub.image is not None:
                 lines.append(f"\\includegraphics{{{sub.image.path}}}")
-            if sub.caption:
-                lines.append(f"\\caption{{{self._inlines(sub.caption)}}}")
-            if sub.label:
-                lines.append(f"\\label{{{sub.label}}}")
+            if not sub.caption_above:
+                lines.extend(sub_cap)
             lines.append("\\end{subfigure}")
-        if block.caption:
-            star = "" if block.caption_numbered else "*"
-            lines.append(f"\\caption{star}{{{self._inlines(block.caption)}}}")
-        if block.label:
-            lines.append(f"\\label{{{block.label}}}")
+        if not block.caption_above:
+            lines.extend(cap_lines)
         lines.append("\\end{figure}")
         return "\n".join(lines)
 
@@ -343,6 +355,8 @@ class LatexWriter:
             return f"\\{cmd}{{{self._inlines(node.inlines)}}}"
         if isinstance(node, ir.Math):
             return f"${node.latex}$"
+        if isinstance(node, ir.DisplayMath):
+            return self._math_block(node.to_block())
         if isinstance(node, ir.Ref):
             return self._ref(node)
         if isinstance(node, ir.Cite):

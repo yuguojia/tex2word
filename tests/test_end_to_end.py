@@ -27,8 +27,9 @@ def test_corpus_article_converts_without_aborting():
     assert result.report.coverage()["math_raw"] == 0
     assert result.report.coverage()["math_omml"] >= 5
 
-    # Live numbering + cross-reference fields exist.
-    instrs = "".join(t.text or "" for t in root.xpath("//w:instrText", namespaces=NS))
+    # Live numbering + cross-reference fields exist. An equation number's SEQ
+    # field lives inside the math zone (m:t), captions/refs in w:instrText.
+    instrs = "".join(t.text or "" for t in root.xpath("//w:instrText | //m:t", namespaces=NS))
     assert "SEQ Equation" in instrs
     assert "SEQ Table" in instrs
     assert "REF " in instrs

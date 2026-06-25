@@ -38,6 +38,13 @@ def test_extra_text_symbols():
     assert "°" in t and "•" in t and "™" in t
 
 
+def test_textquotesingle_is_straight_apostrophe():
+    # \textquotesingle -> straight ' (U+0027), unlike ' which curls to ’ (U+2019)
+    t = _text(r"\begin{document}it\textquotesingle{}s vs '\end{document}")
+    assert "it's" in t  # straight apostrophe
+    assert "’" in t  # the bare ' still curls
+
+
 def test_thanks_becomes_a_footnote():
     # \thanks in the title -> a footnote on the title text
     src = r"\begin{document}\title{Paper\thanks{Funded by X}}\author{A}\maketitle\end{document}"

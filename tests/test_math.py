@@ -254,8 +254,16 @@ def _conv_root(src):
 
 
 def _seq_eq_count(root):
+    # an equation number's SEQ field lives in the math zone (m:t); other SEQ
+    # fields (captions) use w:instrText -- count "SEQ Equation" in either.
     W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-    return sum(1 for i in root.iter(f"{{{W}}}instrText") if "SEQ Equation" in (i.text or ""))
+    M = NS["m"]
+    return sum(
+        1
+        for tag in (f"{{{W}}}instrText", f"{{{M}}}t")
+        for i in root.iter(tag)
+        if "SEQ Equation" in (i.text or "")
+    )
 
 
 def test_align_star_renders_aligned_matrix_no_numbers():

@@ -17,8 +17,11 @@ See \eqref{eq:1} and \eqref{eq:2}.
 
 
 def _instrs(docx) -> str:
+    # equation numbers carry their SEQ/STYLEREF instruction in m:t (inside the
+    # math zone); captions/refs use w:instrText -- gather both.
     root = document_root(docx)
-    return "".join(t.text or "" for t in root.xpath("//w:instrText", namespaces=NS))
+    nodes = root.xpath("//w:instrText | //m:t", namespaces=NS)
+    return "".join(t.text or "" for t in nodes)
 
 
 def test_flat_numbering_is_default():
@@ -57,7 +60,9 @@ def test_by_section_ref_bookmark_wraps_full_number():
     root = document_root(convert_source(SRC, number_by_section=True).docx)
     # find a bookmarkStart followed (within the paragraph) by STYLEREF + SEQ
     instrs_in_bookmarked = root.xpath(
-        "//w:p[.//w:bookmarkStart]//w:instrText/text()", namespaces=NS
+        "//w:p[.//w:bookmarkStart]//w:instrText/text() "
+        "| //w:p[.//w:bookmarkStart]//m:t/text()",
+        namespaces=NS,
     )
     joined = " ".join(instrs_in_bookmarked)
     assert "STYLEREF 1 \\s" in joined and "SEQ Equation \\s 1" in joined

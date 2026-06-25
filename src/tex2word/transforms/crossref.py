@@ -107,6 +107,15 @@ def _collect(blocks: list[ir.Block], labels: dict[str, ir.LabelInfo]) -> None:
                         labels[sub.label] = ir.LabelInfo(
                             kind="figure", counter_name="Figure", bookmark=bookmark
                         )
+        # display equations sharing a paragraph with text carry their label on the
+        # inline node, so register those too.
+        if isinstance(block, ir.Paragraph):
+            for inline in block.inlines:
+                if isinstance(inline, ir.DisplayMath) and inline.label:
+                    labels[inline.label] = ir.LabelInfo(
+                        kind="equation", counter_name="Equation",
+                        bookmark=sanitize_bookmark(inline.label),
+                    )
         # recurse into nested block containers
         if isinstance(block, ir.Quote | ir.Theorem):
             _collect(block.blocks, labels)

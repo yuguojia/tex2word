@@ -12,11 +12,21 @@ def load_styles_xml() -> bytes:
     return resources.files(__package__).joinpath("styles.xml").read_bytes()
 
 
+#: scripts whose BCP-47 codes belong in ``w:eastAsia`` (the East-Asian proofing
+#: language), not in ``w:val`` (which is the *Latin*-script language). Putting a
+#: CJK code in ``w:val`` makes Word treat ASCII runs as East-Asian and render
+#: them in the eastAsia font -- i.e. English text shows up in the Chinese font.
+_EAST_ASIAN_LANGS = ("zh", "ja", "ko")
+
+
 def apply_language(styles_xml: bytes, lang: str) -> bytes:
     """Set the document default language (``w:lang``) in the styles docDefaults.
 
-    Word uses this for spell-check and accessibility (document language). Returns
-    the styles bytes unchanged if the structure isn't found."""
+    Word uses this for spell-check and accessibility (document language). An
+    East-Asian language (zh/ja/ko) is set on ``w:eastAsia`` and the Latin
+    ``w:val`` is left as-is (defaulting to ``en-US``), so Latin text keeps the
+    Latin font; any other language is set on ``w:val`` as before. Returns the
+    styles bytes unchanged if the structure isn't found."""
     from lxml import etree
 
     def w(name: str) -> str:
@@ -32,7 +42,12 @@ def apply_language(styles_xml: bytes, lang: str) -> bytes:
     lang_el = rpr.find(w("lang"))
     if lang_el is None:
         lang_el = etree.SubElement(rpr, w("lang"))  # last child (lang is late in CT_RPr)
-    lang_el.set(w("val"), lang)
+    if lang.split("-")[0].lower() in _EAST_ASIAN_LANGS:
+        lang_el.set(w("eastAsia"), lang)
+        if not lang_el.get(w("val")):
+            lang_el.set(w("val"), "en-US")  # keep Latin text in the Latin language/font
+    else:
+        lang_el.set(w("val"), lang)
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 

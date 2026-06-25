@@ -35,6 +35,10 @@ class Lit:
     upright: bool = False
     bold: bool = False
     script: str | None = None  # OMML m:scr: script/double-struck/fraktur/...
+    #: True for genuine text mode (\text/\textrm/...) -> OMML m:nor (normal,
+    #: non-math text). Upright *math* (\mathrm/\symup/\uppi/functions) instead
+    #: uses the math "plain" style (m:sty="p"), keeping math spacing.
+    text_mode: bool = False
 
 
 @dataclass
@@ -137,6 +141,24 @@ MNode = (
 
 # Functions whose subscript is rendered as an underscript limit in display.
 LIMIT_FUNCS = frozenset({"lim", "limsup", "liminf", "max", "min", "sup", "inf", "gcd", "det"})
+
+# An n-ary operator (\int, \sum, ...) binds the operand that follows it as its
+# body (OMML m:e), up to the next relation or +/- sign -- matching how
+# ``\int_\gamma f = \sum_k a_k`` reads (integrand ``f`` only) or how a trailing
+# ``\sum_k n(k) R(k)`` swallows the whole product. These tables list the chars /
+# commands that close the operand so the n-ary stops binding there.
+_NARY_BODY_STOP_CHARS = frozenset("=<>+-")
+_NARY_BODY_STOP_CMDS = frozenset({
+    # relations
+    "leq", "le", "geq", "ge", "neq", "ne", "equiv", "approx", "sim", "simeq",
+    "cong", "propto", "ll", "gg", "subset", "supset", "subseteq", "supseteq",
+    "in", "ni", "notin", "mid", "parallel", "perp", "prec", "succ", "models",
+    "preceq", "succeq", "gtrsim", "lesssim", "gtrless", "lessgtr", "asymp",
+    "doteq", "triangleq", "coloneqq", "eqqcolon", "approxeq", "sqsubseteq",
+    "sqsupseteq", "vdash", "dashv", "lhd", "rhd", "unlhd", "unrhd",
+    # +/- like signs acting as binary operators at the operand level
+    "pm", "mp",
+})
 
 # \big \Big \bigg \Bigg (+ l/r/m variants): manual delimiter sizing -- the size
 # is purely visual, so we drop it and let the following delimiter render itself.
@@ -298,12 +320,41 @@ class _Parser:
             ttype, _ = self._peek()
             if ttype in ("}", "eof") or ttype in stop:
                 break
-            atom = self.parse_atom()
-            if atom is None:
-                continue
-            atom = self._maybe_scripts(atom)
-            items.append(atom)
+            item = self._parse_item(stop)
+            if item is not None:
+                items.append(item)
         return Row(items)
+
+    def _parse_item(self, stop: frozenset[str]) -> MNode | None:
+        """Parse one atom with its scripts; an n-ary then binds its operand."""
+        atom = self.parse_atom()
+        if atom is None:
+            return None
+        atom = self._maybe_scripts(atom)
+        if isinstance(atom, Nary) and atom.body is None:
+            atom.body = self._nary_body(stop)
+        return atom
+
+    def _nary_body(self, stop: frozenset[str]) -> MNode | None:
+        """Collect the operand that an n-ary operator binds (its OMML m:e).
+
+        Consumes following atoms until a relation / +/- sign or a structural
+        boundary (group/environment/delimiter close), so ``\\int_a^b f = g``
+        keeps only ``f`` as the integrand while ``\\sum_k a_k b_k`` takes the
+        whole product."""
+        items: list[MNode] = []
+        while True:
+            ttype, tval = self._peek()
+            if ttype in ("}", "eof", "newline", "&") or ttype in stop:
+                break
+            if ttype == "char" and tval in _NARY_BODY_STOP_CHARS:
+                break
+            if ttype == "cmd" and (tval in _NARY_BODY_STOP_CMDS or tval in ("right", "end")):
+                break
+            item = self._parse_item(stop)
+            if item is not None:
+                items.append(item)
+        return _flatten(Row(items)) if items else None
 
     def parse_group(self) -> Row:
         """Parse a braced group or a single atom (used for command arguments)."""
@@ -353,7 +404,9 @@ class _Parser:
             self._expect("}")
             return Group(row)
         if ttype == "num":
-            return Lit(tval or "", upright=True)
+            # digits are upright by default in Word's math zone; tagging them
+            # m:nor strips that math spacing/typesetting, so leave them unmarked.
+            return Lit(tval or "")
         if ttype == "char":
             return self._char_atom(tval or "")
         if ttype == "cmd":
@@ -367,9 +420,12 @@ class _Parser:
         return None
 
     def _char_atom(self, c: str) -> MNode:
-        if c.isalpha():
-            return Lit(c)  # italic by default in Word math
-        return Lit(c, upright=True)
+        # Both letters (italic) and operators/digits/punctuation (upright) are
+        # typeset correctly by Word's math engine on their own. Forcing m:nor on
+        # the non-letters turns them into normal text and drops the relational/
+        # binary-operator spacing (so ``a=b+c`` rendered cramped), so leave the
+        # styling to the math zone -- only explicit \mathrm/\text mark upright.
+        return Lit(c)
 
     def parse_command(self, name: str) -> MNode:  # noqa: C901 - dispatch table
         if name in S.ACCENTS:
@@ -413,26 +469,31 @@ class _Parser:
             bot = self.parse_group()
             base = self.parse_group()
             return Matrix([[base], [bot]])
+        if name in ("text", "mbox", "textrm", "textnormal", "textsf", "texttt", "textsc"):
+            # genuine text mode -> normal (non-math) upright text, OMML m:nor
+            return _styled(self.parse_group(), upright=True, text_mode=True)
         if name in (
-            "text", "mathrm", "operatorname", "operatorname*",
-            "mathsf", "mathtt", "mbox",
-            "textrm", "textnormal", "textsf", "texttt", "textsc",
+            "mathrm", "operatorname", "operatorname*", "mathsf", "mathtt",
+            # unicode-math upright alphabets: \symup \symrm \symsf \symtt
+            "symup", "symrm", "symsf", "symtt",
         ):
-            row = self.parse_group()
-            return _styled(row, upright=True)
+            # upright *math* -> the math "plain" style (m:sty="p"), not m:nor
+            return _styled(self.parse_group(), upright=True)
         if name == "textbf":
-            return _styled(self.parse_group(), upright=True, bold=True)
+            return _styled(self.parse_group(), upright=True, bold=True, text_mode=True)
         if name in ("textit", "textsl", "emph"):
             return self.parse_group_as_group()
-        if name == "mathbf" or name == "boldsymbol" or name == "bm":
+        if name in ("mathbf", "boldsymbol", "bm", "symbf"):
             return _styled(self.parse_group(), bold=True)
-        if name == "mathbb":
+        if name == "symbfup":  # unicode-math: bold upright
+            return _styled(self.parse_group(), bold=True, upright=True)
+        if name in ("mathbb", "symbb"):
             return _styled(self.parse_group(), script="double-struck", upright=True)
-        if name == "mathcal" or name == "mathscr":
+        if name in ("mathcal", "mathscr", "symcal", "symscr"):
             return _styled(self.parse_group(), script="script")
-        if name == "mathfrak":
+        if name in ("mathfrak", "symfrak"):
             return _styled(self.parse_group(), script="fraktur")
-        if name == "mathit":
+        if name in ("mathit", "symit", "symsfit"):
             return self.parse_group_as_group()
         if name in (
             "mathbin", "mathrel", "mathop", "mathord",
@@ -440,6 +501,8 @@ class _Parser:
         ):
             # math-class wrappers only affect spacing -> render their content
             return self.parse_group_as_group()
+        if name in ("symbfit", "symbfsf"):  # unicode-math: bold italic
+            return _styled(self.parse_group(), bold=True)
         if name == "left":
             return self._parse_fenced()
         if name == "right":
@@ -458,7 +521,13 @@ class _Parser:
         if name in S.SPACING:
             return Lit(S.SPACING[name], upright=True)
         if name in S.SYMBOLS:
-            return Lit(S.SYMBOLS[name], upright=True)
+            # Greek letters, relations, binary operators and arrows all render
+            # with the correct shape (lowercase Greek italic, the rest upright)
+            # and the correct math spacing on their own. m:nor would force them
+            # to normal text and lose that spacing, so emit a plain math run.
+            return Lit(S.SYMBOLS[name])
+        if name in S.UPGREEK:  # upgreek package: \uppi \Upomega ... -> upright
+            return Lit(S.UPGREEK[name], upright=True)
         if name == "begin":
             return self._parse_environment()
         if name == "end":
@@ -550,9 +619,9 @@ class _Parser:
                 self._next()
                 close_delim = self._read_delim()
                 return Fenced(open_delim, close_delim, Row(items))
-            atom = self.parse_atom()
-            if atom is not None:
-                items.append(self._maybe_scripts(atom))
+            item = self._parse_item(frozenset())
+            if item is not None:
+                items.append(item)
 
     def _parse_substack(self) -> MNode:
         """\\substack{a \\\\ b \\\\ c} -> a single-column matrix (stacked limits)."""
@@ -636,15 +705,18 @@ class _Parser:
 
 
 def _styled(
-    row: Row, *, upright: bool = False, bold: bool = False, script: str | None = None
+    row: Row, *, upright: bool = False, bold: bool = False,
+    script: str | None = None, text_mode: bool = False,
 ) -> MNode:
     """Apply styling to every Lit leaf in a parsed group."""
     for item in row.items:
-        _apply_style(item, upright=upright, bold=bold, script=script)
+        _apply_style(item, upright=upright, bold=bold, script=script, text_mode=text_mode)
     return Group(row)
 
 
-def _apply_style(node: MNode, *, upright: bool, bold: bool, script: str | None) -> None:
+def _apply_style(
+    node: MNode, *, upright: bool, bold: bool, script: str | None, text_mode: bool
+) -> None:
     if isinstance(node, Lit):
         if upright:
             node.upright = True
@@ -652,12 +724,14 @@ def _apply_style(node: MNode, *, upright: bool, bold: bool, script: str | None) 
             node.bold = True
         if script:
             node.script = script
+        if text_mode:
+            node.text_mode = True
     elif isinstance(node, Group):
         for item in node.row.items:
-            _apply_style(item, upright=upright, bold=bold, script=script)
+            _apply_style(item, upright=upright, bold=bold, script=script, text_mode=text_mode)
     elif isinstance(node, Row):
         for item in node.items:
-            _apply_style(item, upright=upright, bold=bold, script=script)
+            _apply_style(item, upright=upright, bold=bold, script=script, text_mode=text_mode)
 
 
 def _flatten(row: Row) -> MNode:
