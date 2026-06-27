@@ -121,6 +121,13 @@ The GUI depends on this package for the actual conversion, so everything in
   Our custom styles are merged in so nothing renders unstyled. The template can
   also be named from the source with `\texwordtemplate{TEMPLATE.docx}` (path
   relative to the `.tex` file); the `--reference-doc` option takes priority.
+  **Keep the template's content** with `\texwordtemplate[keep]{TEMPLATE.docx}`:
+  instead of lifting only the template's styling onto a fresh document, the
+  template's own pages (cover, front-matter, fixed boilerplate, section breaks)
+  are kept and the converted body is spliced in at a `tex2word_section` bookmark
+  the template author drops on the insertion paragraph (in Word: Insert →
+  Bookmark → name `tex2word_section` → Add). Without that bookmark it falls back
+  to styling-only and warns.
   `\texwordparstyle{Style Name}` sets the Word style of the single paragraph it
   precedes (like `\noindent`, its scope is one paragraph), naming a template style
   by its display name.

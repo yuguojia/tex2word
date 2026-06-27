@@ -42,6 +42,24 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Keep the Word template's content (`\texwordtemplate[keep]{...}`).** A new
+  optional argument on the in-source template directive switches from the default
+  *styling-only* adoption (a fresh document built onto the template's styles, theme
+  and page geometry) to *content-injection*: the template package is kept intact —
+  its cover page, front-matter, fixed boilerplate, headers/footers and section
+  breaks all survive — and the converted body is spliced in **at the template's
+  `tex2word_section` bookmark** (the same bookmark already used to pick a section's
+  page geometry; in Word: Insert → Bookmark → name `tex2word_section` → Add, on the
+  paragraph after which the document should be inserted). The converted document's
+  styles/numbering are merged into the template's, its images are namespaced under
+  `media/t2w/` (so they never clash with the template's own media), and its
+  footnotes/endnotes/comments are appended to the template's with their ids offset
+  past the template's (no collisions). Relationship ids that would collide are
+  renamed, and the round-trip manifest is still embedded, so `to-latex` recovery
+  keeps working. Without the bookmark (or an unreadable template) it falls back to
+  the styling-only path and warns. The keyword also accepts `preserve` / `content`.
+  The default `\texwordtemplate{...}` (no `[…]`) and `--reference-doc` keep the
+  historical styling-only behaviour.
 - **Per-paragraph Word style from the source.** A new `\texwordparstyle{Style Name}`
   directive sets the Word paragraph style of the single paragraph it precedes —
   the per-paragraph counterpart to `\texwordstyle{body}{…}` (which restyles *all*

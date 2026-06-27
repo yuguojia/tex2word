@@ -2113,8 +2113,9 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("AddToShipoutPicture", "*{"),
             # tex2word-only: bind a logical role to a Word style (consume 2 args).
             MacroSpec("texwordstyle", "{{"),
-            # tex2word-only: name a Word reference template (consume 1 arg).
-            MacroSpec("texwordtemplate", "{"),
+            # tex2word-only: name a Word reference template (optional [mode] +
+            # the path arg). The optional [keep] selects content-injection mode.
+            MacroSpec("texwordtemplate", "[{"),
             # tex2word-only: set the current paragraph's Word style (consume 1 arg).
             MacroSpec("texwordparstyle", "{"),
             MacroSpec("newcounter", "{["),
@@ -2597,10 +2598,13 @@ _CAPTION_OVERRIDE_KEYS = {
 _CAPTION_OVERRIDE_RE = re.compile(
     r"\\texwordcaption\s*\{([^}]*)\}\s*\{([^}]*)\}"
 )
-#: \texwordtemplate{path.docx}: in-source Word reference template path.
+#: \texwordtemplate[mode]{path.docx}: in-source Word reference template path,
+#: with an optional [mode] (``keep`` selects content-injection mode).
 _TEMPLATE_RE = re.compile(
-    r"\\texwordtemplate\s*\{([^}]*)\}"
+    r"\\texwordtemplate\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}"
 )
+#: optional-argument keywords that select "keep the template's content" mode.
+_TEMPLATE_KEEP_KEYWORDS = {"keep", "keepcontent", "content", "preserve"}
 
 
 def _detect_style_overrides(doc: ir.Document, source: str) -> None:
@@ -2663,17 +2667,24 @@ def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
 
 
 def _detect_template(doc: ir.Document, source: str) -> None:
-    """Pick up a ``\\texwordtemplate{path.docx}`` reference-template directive.
+    """Pick up a ``\\texwordtemplate[mode]{path.docx}`` reference-template directive.
 
     Names the Word ``.docx`` whose styles, theme and page geometry the output
     adopts -- the in-source equivalent of ``--reference-doc``. A relative path is
     resolved against the ``.tex`` file's directory. The CLI ``--reference-doc``
     option takes priority when both are given. The last directive wins.
+
+    The optional ``[mode]`` argument selects how the template is used: ``keep``
+    (also ``preserve`` / ``content``) keeps the template's own content and
+    splices the converted body at its ``tex2word_section`` bookmark, instead of
+    lifting only the template's styling onto a fresh document.
     """
     for m in _TEMPLATE_RE.finditer(source):
-        path = m.group(1).strip()
+        path = m.group(2).strip()
         if path:
             doc.meta.template_doc = path
+            mode = (m.group(1) or "").strip().lower()
+            doc.meta.template_keep_content = mode in _TEMPLATE_KEEP_KEYWORDS
 
 
 def _detect_language(preamble: str) -> str | None:

@@ -82,7 +82,9 @@ def convert_source(
         if image_renderer is None:
             report.warn("math", "no math-image backend (install tex2word[mathimg] or TeX)")
 
-    reference = _load_reference(reference_doc, doc.meta.template_doc, base_dir, report)
+    reference, reference_bytes = _load_reference(
+        reference_doc, doc.meta.template_doc, base_dir, report
+    )
     hf_refs, hf_parts, hf_rels, hf_extra = _header_footer_wiring(reference, report)
     if not hf_refs and doc.meta.running_head:
         # no template headers -> synthesise a running-head header + page footer
@@ -175,6 +177,35 @@ def convert_source(
             reference.raw_numbering, reference.heading_rename, num_ids,
             appendix_ids=roles.appendix, part_id=roles.part,
         ) or numbering_xml()
+
+    # \texwordtemplate[keep]: keep the template's own content and splice the
+    # converted body at its tex2word_section bookmark, rather than emitting a
+    # fresh document onto the lifted styling. Falls back to the styling-only path
+    # when the template can't be injected into (no bookmark / unreadable).
+    if doc.meta.template_keep_content and reference is not None and reference_bytes:
+        from .templates.inject import build_injected_docx
+
+        injected = build_injected_docx(
+            reference_bytes,
+            document_xml=document_xml,
+            styles_xml=styles_xml,
+            numbering_xml=numbering,
+            settings_xml=reference.settings_xml,
+            document_rels=writer.document_rels,
+            media=writer.media,
+            footnotes=writer.footnotes_xml(),
+            endnotes=writer.endnotes_xml(),
+            comments=writer.comments_xml(),
+            manifest=build_manifest(doc) if embed_manifest else None,
+        )
+        if injected is not None:
+            return ConversionResult(document=doc, report=report, docx=injected)
+        report.warn(
+            "reference-doc",
+            "\\texwordtemplate[keep]: no 'tex2word_section' bookmark found in the "
+            "template (or it is unreadable); kept the template styling only and "
+            "did not preserve its content",
+        )
 
     from .templates.reference import merge_notes
 
@@ -378,6 +409,10 @@ def _load_reference(
     The CLI ``--reference-doc`` (``reference_doc``) takes priority over an
     in-source ``\\texwordtemplate{...}`` directive (``template_doc``); a relative
     ``\\texwordtemplate`` path is resolved against the ``.tex`` file's directory.
+
+    Returns ``(reference_parts, raw_bytes)`` -- the raw template bytes are kept so
+    ``\\texwordtemplate[keep]`` can reuse the whole package; both are ``None`` when
+    no template is configured or it can't be read.
     """
     path = reference_doc
     if path is None and template_doc:
@@ -387,17 +422,18 @@ def _load_reference(
             else os.path.join(base_dir, template_doc)
         )
     if not path:
-        return None
+        return None, None
     from .templates.reference import extract_reference
 
     try:
         with open(path, "rb") as fh:
-            ref = extract_reference(fh.read())
+            raw = fh.read()
+        ref = extract_reference(raw)
         report.info("reference-doc", f"using template styles from {path}")
-        return ref
+        return ref, raw
     except (OSError, ValueError) as exc:
         report.warn("reference-doc", f"ignored ({exc}); used the built-in styles")
-        return None
+        return None, None
 
 
 def convert_file(
