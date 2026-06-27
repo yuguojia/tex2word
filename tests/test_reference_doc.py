@@ -870,9 +870,34 @@ def test_keep_mode_splices_body_between_template_content(tmp_path):
     doc = _part(result.docx, "word/document.xml").decode()
     # the template's own content is preserved ...
     assert "COVER PAGE" in doc and "BACK MATTER" in doc
-    # ... and our converted body is spliced in between (after the anchor).
+    # ... and our converted body is spliced in between (where the anchor was).
     assert "Intro" in doc
     assert doc.index("COVER PAGE") < doc.index("Intro") < doc.index("BACK MATTER")
+    # the bookmarked placeholder paragraph itself is replaced (no stray empty page)
+    assert "ANCHOR" not in doc
+
+
+def test_keep_mode_preserves_section_break_on_replaced_anchor(tmp_path):
+    # the bookmarked paragraph is deleted, but a section break it carried must
+    # survive (on a trailing empty paragraph) so the template's layout is kept.
+    document = (
+        f'<?xml version="1.0"?><w:document xmlns:w="{_W}" xmlns:r="{_R}"><w:body>'
+        '<w:p><w:r><w:t>COVER</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:type w:val="nextPage"/></w:sectPr></w:pPr>'
+        '<w:bookmarkStart w:id="9" w:name="tex2word_section"/>'
+        '<w:bookmarkEnd w:id="9"/></w:p>'
+        '<w:p><w:r><w:t>BACK</w:t></w:r></w:p>'
+        '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>'
+        "</w:body></w:document>"
+    ).encode()
+    result = _keep_convert(
+        tmp_path, r"\section{Intro}Body.", template=_keep_docx(document)
+    )
+    body = etree.fromstring(_part(result.docx, "word/document.xml")).find(f"{{{_W}}}body")
+    # exactly the two section breaks remain (the carried one + the body-level one)
+    sectprs = list(body.iter(f"{{{_W}}}sectPr"))
+    assert len(sectprs) == 2
 
 
 def test_keep_mode_output_is_structurally_valid(tmp_path):
@@ -999,3 +1024,60 @@ def test_keep_mode_default_is_styling_only(tmp_path):
         convert_source(src, base_dir=str(tmp_path)).docx, "word/document.xml"
     ).decode()
     assert "Intro" in doc and "COVER PAGE" not in doc
+
+
+def test_keep_mode_dotx_template_rewrites_main_part_content_type(tmp_path):
+    # A .dotx template declares /word/document.xml as the *template* main part;
+    # the emitted .docx must use the *document* main part or Word reports it as
+    # corrupt. (We feed a template-typed Content_Types and check it is rewritten.)
+    template_ct = _KEEP_CT.replace(
+        b"wordprocessingml.document.main+xml", b"wordprocessingml.template.main+xml"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", template_ct)
+        z.writestr("_rels/.rels", _KEEP_ROOT_RELS)
+        z.writestr("word/document.xml", _KEEP_DOC)
+        z.writestr("word/styles.xml", _REF_STYLES)
+        z.writestr("word/_rels/document.xml.rels", _KEEP_DOC_RELS)
+    result = _keep_convert(tmp_path, r"\section{Intro}Body.", template=buf.getvalue())
+    ct = _part(result.docx, "[Content_Types].xml").decode()
+    assert "wordprocessingml.document.main+xml" in ct
+    assert "wordprocessingml.template.main+xml" not in ct
+
+
+def test_keep_mode_remaps_localised_builtin_style_refs(tmp_path):
+    # The template's cover paragraphs reference a localised built-in style id
+    # ("aff9" whose w:name is "Title"); merge_styles normalises that id to our
+    # canonical "Title", so the kept body's reference must be remapped too or the
+    # cover line loses its style.
+    styles = (
+        f'<?xml version="1.0"?><w:styles xmlns:w="{_W}">'
+        '<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="aff9"><w:name w:val="Title"/></w:style>'
+        "</w:styles>"
+    ).encode()
+    document = (
+        f'<?xml version="1.0"?><w:document xmlns:w="{_W}" xmlns:r="{_R}"><w:body>'
+        '<w:p><w:pPr><w:pStyle w:val="aff9"/></w:pPr><w:r><w:t>COVER TITLE</w:t></w:r></w:p>'
+        '<w:p><w:bookmarkStart w:id="9" w:name="tex2word_section"/>'
+        '<w:bookmarkEnd w:id="9"/></w:p>'
+        '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>'
+        "</w:body></w:document>"
+    ).encode()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", _KEEP_CT)
+        z.writestr("_rels/.rels", _KEEP_ROOT_RELS)
+        z.writestr("word/document.xml", document)
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/_rels/document.xml.rels", _KEEP_DOC_RELS)
+    result = _keep_convert(tmp_path, r"\section{Intro}Body.", template=buf.getvalue())
+    body = etree.fromstring(_part(result.docx, "word/document.xml")).find(f"{{{_W}}}body")
+    cover = next(p for p in body.iter(f"{{{_W}}}p")
+                 if "COVER TITLE" in "".join(t.text or "" for t in p.iter(f"{{{_W}}}t")))
+    pstyle = cover.find(f"{{{_W}}}pPr/{{{_W}}}pStyle")
+    assert pstyle is not None and pstyle.get(f"{{{_W}}}val") == "Title"  # remapped
+    styles_ids = {s.get(f"{{{_W}}}styleId")
+                  for s in etree.fromstring(_part(result.docx, "word/styles.xml")).findall(f"{{{_W}}}style")}
+    assert "Title" in styles_ids and "aff9" not in styles_ids  # normalised in styles

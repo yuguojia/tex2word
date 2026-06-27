@@ -1,8 +1,10 @@
 """Localisable caption / cross-reference wording (--caption-locale, \\texwordcaption).
 
-The SEQ counter names stay English ("SEQ Figure"/"SEQ Table"); only the displayed
-label word, the chapter/number separator, the delimiter and the cleveref prefixes
-localise -- so a Chinese document reads 图1-1 while the live fields keep working.
+The SEQ counter names stay English ("SEQ Figure"/"SEQ Table") by default; only the
+displayed label word, the chapter/number separator, the delimiter and the cleveref
+prefixes localise -- so a Chinese document reads 图1-1 while the live fields keep
+working. The counter identifier itself can be renamed with
+``\\texwordcaption{figureseq}{...}`` when a template needs it.
 """
 
 from __future__ import annotations
@@ -98,3 +100,32 @@ def test_config_overrides_keep_other_fields():
     assert cfg.section_sep == "."
     assert cfg.label("Table") == "表"  # unrelated fields untouched
     assert cfg.delim == "　"
+
+
+def test_seq_name_default_is_canonical():
+    cfg = CaptionConfig.chinese()  # zh labels, but SEQ identifiers stay English
+    assert cfg.seq_name("Figure") == "Figure"
+    assert cfg.seq_name("Table") == "Table"
+
+
+def test_texwordcaption_renames_seq_counter():
+    # \texwordcaption{figureseq}{...} renames the SEQ counter identifier in the
+    # caption AND the matching \listoffigures \c reference, so the list still builds.
+    src = (
+        r"\documentclass{article}"
+        r"\texwordcaption{figureseq}{图}"
+        r"\texwordcaption{tableseq}{表}"
+        r"\texwordcaption{equationseq}{公式}"
+        r"\begin{document}\section{S}"
+        r"\listoffigures"
+        r"\begin{figure}\caption{A}\label{f}\end{figure}"
+        r"\begin{table}\caption{B}\label{t}\begin{tabular}{c}x\\\end{tabular}\end{table}"
+        r"\begin{equation}E=mc^2\label{e}\end{equation}"
+        r"\end{document}"
+    )
+    doc = zipfile.ZipFile(io.BytesIO(convert_source(src).docx)).read(
+        "word/document.xml"
+    ).decode()
+    assert "SEQ 图" in doc and "SEQ 表" in doc and "SEQ 公式" in doc
+    assert 'c "图"' in doc  # \listoffigures \c reference renamed in lock-step
+    assert "SEQ Figure" not in doc and "SEQ Equation" not in doc  # no stale English

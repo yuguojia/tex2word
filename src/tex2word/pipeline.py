@@ -197,6 +197,7 @@ def convert_source(
             endnotes=writer.endnotes_xml(),
             comments=writer.comments_xml(),
             manifest=build_manifest(doc) if embed_manifest else None,
+            heading_rename=reference.heading_rename,
         )
         if injected is not None:
             return ConversionResult(document=doc, report=report, docx=injected)

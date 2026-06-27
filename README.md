@@ -125,9 +125,10 @@ The GUI depends on this package for the actual conversion, so everything in
   instead of lifting only the template's styling onto a fresh document, the
   template's own pages (cover, front-matter, fixed boilerplate, section breaks)
   are kept and the converted body is spliced in at a `tex2word_section` bookmark
-  the template author drops on the insertion paragraph (in Word: Insert →
-  Bookmark → name `tex2word_section` → Add). Without that bookmark it falls back
-  to styling-only and warns.
+  the template author drops on a placeholder paragraph (in Word: Insert →
+  Bookmark → name `tex2word_section` → Add). That placeholder paragraph is
+  *replaced* by the converted body (so it leaves no empty page), and a `.dotx`
+  template works too. Without the bookmark it falls back to styling-only and warns.
   `\texwordparstyle{Style Name}` sets the Word style of the single paragraph it
   precedes (like `\noindent`, its scope is one paragraph), naming a template style
   by its display name.
