@@ -46,6 +46,16 @@ _SEPARATOR_NOTE_TYPES = frozenset(
 
 _IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 
+#: main-document part content types. A ``.dotx`` template uses the *template*
+#: type; a ``.docx`` (what we emit) must use the *document* type or Word reports
+#: the file as corrupt.
+_TEMPLATE_MAIN_CT = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml"
+)
+_DOCUMENT_MAIN_CT = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+)
+
 _CONTENT_TYPE = {
     "footnotes": "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
     "endnotes": "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
@@ -96,6 +106,7 @@ def build_injected_docx(
     endnotes: bytes | None,
     comments: bytes | None,
     manifest: bytes | None,
+    heading_rename: dict[str, str] | None = None,
 ) -> bytes | None:
     """Splice the converted body into the template at ``tex2word_section``.
 
@@ -119,6 +130,25 @@ def build_injected_docx(
     anchor = _find_marked_child(tbody)
     if anchor is None:
         return None  # no bookmark -> caller warns + falls back to styling-only
+
+    # The merged styles.xml normalises the template's localised built-in style ids
+    # to our canonical ones (e.g. a cover title saved as "aff9" -> "Title"). The
+    # template's *kept* parts still reference the originals, so remap their style
+    # references to match, or those paragraphs (the template's own cover/heading
+    # lines) would lose their style. The spliced fragment already uses the
+    # canonical ids (the rename's values, not its keys), so it stays untouched.
+    rename = heading_rename or {}
+    if rename:
+        _remap_style_refs(tdoc, rename)  # the body (before the fragment is added)
+        for part_name in _style_ref_parts(names):
+            try:
+                root = etree.fromstring(parts[part_name])
+            except etree.XMLSyntaxError:
+                continue
+            _remap_style_refs(root, rename)
+            parts[part_name] = etree.tostring(
+                root, xml_declaration=True, encoding="UTF-8", standalone=True
+            )
 
     # the converted body's blocks, minus its trailing section properties.
     gbody = etree.fromstring(document_xml).find(_w("body"))
@@ -176,11 +206,22 @@ def build_injected_docx(
         _add_rel(rels_root, rid, MANIFEST_REL_TYPE, "tex2word/manifest.json")
         overrides[f"/{MANIFEST_PART}"] = "application/json"
 
-    # splice the converted body in after the bookmarked paragraph, then commit
-    # the rels + content-types we touched.
+    # splice the converted body in at the bookmarked paragraph, then commit the
+    # rels + content-types we touched. The bookmarked placeholder paragraph is
+    # *replaced* by the converted body (so it leaves no stray empty page); a
+    # section break it carried is preserved on a trailing empty paragraph so the
+    # template's page layout is kept. A non-paragraph anchor (e.g. a bookmark in a
+    # table) is kept and the body inserted after it instead.
     idx = list(tbody).index(anchor)
-    for offset, frag in enumerate(fragment, 1):
+    for offset, frag in enumerate(fragment):
         tbody.insert(idx + offset, frag)
+    if anchor.tag == _w("p"):
+        sectpr = anchor.find(f"{_w('pPr')}/{_w('sectPr')}")
+        if sectpr is not None:
+            keep = etree.Element(_w("p"))
+            etree.SubElement(keep, _w("pPr")).append(sectpr)
+            tbody.insert(idx + len(fragment), keep)
+        tbody.remove(anchor)
     parts["word/document.xml"] = etree.tostring(
         tdoc, xml_declaration=True, encoding="UTF-8", standalone=True
     )
@@ -191,6 +232,40 @@ def build_injected_docx(
         parts["[Content_Types].xml"], media_exts, overrides
     )
     return _zip_parts(parts)
+
+
+# --------------------------------------------------------------------------- #
+# style-reference remapping (keep the template's own paragraph styles working)
+# --------------------------------------------------------------------------- #
+#: elements whose ``w:val`` names a paragraph/character/table style id.
+_STYLE_REF_TAGS = (_w("pStyle"), _w("rStyle"), _w("tblStyle"))
+
+
+def _style_ref_parts(names: set[str]) -> list[str]:
+    """Kept template parts (besides document.xml) that reference main styles.
+
+    Headers, footers and footnote/endnote parts bind to ``styles.xml`` too, so
+    they need the same built-in-id remap. The glossary keeps its *own*
+    ``styles.xml`` (we don't normalise it), so it is deliberately excluded.
+    """
+    keep = []
+    for n in names:
+        if not n.endswith(".xml") or "/glossary/" in n:
+            continue
+        base = n.rsplit("/", 1)[-1]
+        if base.startswith(("header", "footer")) or base in ("footnotes.xml", "endnotes.xml"):
+            keep.append(n)
+    return keep
+
+
+def _remap_style_refs(root: etree._Element, rename: dict[str, str]) -> None:
+    """Rewrite ``w:pStyle``/``w:rStyle``/``w:tblStyle`` ids in *root* per *rename*."""
+    val = _w("val")
+    for tag in _STYLE_REF_TAGS:
+        for el in root.iter(tag):
+            v = el.get(val)
+            if v is not None and v in rename:
+                el.set(val, rename[v])
 
 
 # --------------------------------------------------------------------------- #
@@ -423,8 +498,17 @@ def _shift_fragment_ids(
 def _ensure_content_types(
     ct_bytes: bytes, media_exts: set[str], overrides: dict[str, str]
 ) -> bytes:
-    """Add any missing Default (image extension) / Override (part) declarations."""
+    """Add any missing Default (image extension) / Override (part) declarations.
+
+    Also normalise the main-document part type: a ``.dotx`` template declares
+    ``/word/document.xml`` as the *template* main part (``…template.main+xml``);
+    our output is a ``.docx``, so it must be the *document* main part, otherwise
+    Word reports the file as corrupt.
+    """
     root = etree.fromstring(ct_bytes)
+    for o in root.findall(f"{{{_CT}}}Override"):
+        if o.get("PartName") == "/word/document.xml" and o.get("ContentType") == _TEMPLATE_MAIN_CT:
+            o.set("ContentType", _DOCUMENT_MAIN_CT)
     have_default = {
         (d.get("Extension") or "").lower()
         for d in root.findall(f"{{{_CT}}}Default")

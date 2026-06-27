@@ -395,7 +395,8 @@ class DocumentWriter:
         if block.label and first:
             start = fields.bookmark_start(_bookmark_for(block.label))
             out.append(start)
-        out += fields.math_number_field("Equation", self.number_by_section,
+        out += fields.math_number_field(self.caption_cfg.seq_name("Equation"),
+                                        self.number_by_section,
                                         self.caption_cfg.section_sep)
         if start is not None:
             out.append(fields.bookmark_end_for(start))
@@ -888,6 +889,13 @@ class DocumentWriter:
 
     def _toc(self, block: ir.TableOfContents, body: _Element) -> None:
         title, code = _TOC_SPEC[block.kind]
+        # the figure/table lists build from the SEQ counter, whose identifier the
+        # caption may have renamed (\texwordcaption{figureseq}{...}); keep the
+        # \c reference in step or the list comes up empty.
+        if block.kind == "figures":
+            code = f'TOC \\h \\z \\c "{self.caption_cfg.seq_name("Figure")}"'
+        elif block.kind == "tables":
+            code = f'TOC \\h \\z \\c "{self.caption_cfg.seq_name("Table")}"'
         heading = self._styled_paragraph("Normal")
         heading.append(self._run(title, bold=True))
         body.append(heading)
@@ -923,7 +931,9 @@ class DocumentWriter:
         if name:
             start = fields.bookmark_start(name)
             p.append(start)
-        for run in fields.number_field(counter, self.number_by_section, cfg.section_sep):
+        for run in fields.number_field(
+            cfg.seq_name(counter), self.number_by_section, cfg.section_sep
+        ):
             p.append(run)
         if start is not None:
             p.append(fields.bookmark_end_for(start))
@@ -1006,7 +1016,9 @@ class DocumentWriter:
             if block.label:
                 start = fields.bookmark_start(_bookmark_for(block.label))
                 cap.append(start)
-            for run in fields.number_field("Algorithm", self.number_by_section, cfg.section_sep):
+            for run in fields.number_field(
+                cfg.seq_name("Algorithm"), self.number_by_section, cfg.section_sep
+            ):
                 cap.append(run)
             if start is not None:
                 cap.append(fields.bookmark_end_for(start))

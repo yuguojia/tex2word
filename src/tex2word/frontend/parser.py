@@ -2592,9 +2592,11 @@ _STYLE_OVERRIDE_ROLES = {
 _STYLE_OVERRIDE_RE = re.compile(
     r"\\texwordstyle\s*\{([^}]*)\}\s*\{([^}]*)\}"
 )
-#: \texwordcaption keys: per-kind label words + wording knobs (see caption_config).
+#: \texwordcaption keys: per-kind label words, SEQ counter names + wording knobs
+#: (see caption_config).
 _CAPTION_OVERRIDE_KEYS = {
     "figurelabel", "tablelabel", "equationlabel", "algorithmlabel",
+    "figureseq", "tableseq", "equationseq", "algorithmseq",
     "labelsep", "sectionsep", "delim", "eqopen", "eqclose",
 }
 _CAPTION_OVERRIDE_RE = re.compile(

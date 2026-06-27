@@ -50,7 +50,15 @@ those documents surfaced.
   breaks all survive — and the converted body is spliced in **at the template's
   `tex2word_section` bookmark** (the same bookmark already used to pick a section's
   page geometry; in Word: Insert → Bookmark → name `tex2word_section` → Add, on the
-  paragraph after which the document should be inserted). The converted document's
+  placeholder paragraph where the document should go). That bookmarked paragraph is
+  **replaced** by the converted body — so it leaves no stray empty page — while a
+  section break it carried is preserved so the page layout is kept. The template's
+  localised built-in style ids are normalised to ours (e.g. a cover title saved as
+  `aff9` → `Title`), and the kept template parts' style references (cover/heading
+  lines, headers/footers, notes) are remapped to match, so they don't lose their
+  styling. A `.dotx` template's main-document part type is rewritten from the
+  *template* to the *document* type, so Word doesn't report the `.docx` as corrupt.
+  The converted document's
   styles/numbering are merged into the template's, its images are namespaced under
   `media/t2w/` (so they never clash with the template's own media), and its
   footnotes/endnotes/comments are appended to the template's with their ids offset
@@ -226,6 +234,8 @@ those documents surfaced.
   | `tablelabel` | table label word | `表` | `表1-1` |
   | `equationlabel` | equation label word | `公式` | (used by `\cref`) |
   | `algorithmlabel` | algorithm label word | `算法` | `算法1-1` |
+  | `figureseq` / `tableseq` | figure/table SEQ counter *identifier* | `图` / `表` | `SEQ 图` field name |
+  | `equationseq` / `algorithmseq` | equation/algorithm SEQ identifier | `公式` / `算法` | `SEQ 公式` field name |
   | `labelsep` | gap between label and number | `` (empty) | `图1` vs `Figure 1` |
   | `sectionsep` | chapter/number separator | `.` | `图1.1` instead of `图1-1` |
   | `delim` | text before the caption | `：` | `图1-1：说明` |
@@ -238,6 +248,13 @@ those documents surfaced.
   % full-width parentheses for equation numbers:
   \texwordcaption{eqopen}{（}\texwordcaption{eqclose}{）}
   ```
+
+  The `…seq` keys are different from the label words: they rename the underlying
+  Word **SEQ counter identifier** (the field name, `SEQ Figure` → `SEQ 图`), which
+  is otherwise kept as a stable English identifier. The `\listoffigures` /
+  `\listoftables` `\c` reference is renamed in lock-step so the lists still build.
+  Use this when a template's own caption/cross-reference fields expect a particular
+  counter name.
 
   Under pdfLaTeX add `\providecommand{\texwordcaption}[2]{}` so the directive is a
   no-op there (same as `\texwordstyle`). Convert with `--number-by-section` to get

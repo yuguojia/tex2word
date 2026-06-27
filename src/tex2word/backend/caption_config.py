@@ -15,7 +15,7 @@ document language or the presence of a CJK font), then overlaid with any
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 #: cleveref-style (abbrev, full) prefixes per target kind -- English default.
 _EN_REF_NAMES: dict[str, tuple[str, str]] = {
@@ -46,6 +46,16 @@ _LABEL_KEYS = {
     "algorithmlabel": "Algorithm",
 }
 
+#: \texwordcaption keys that set a per-kind SEQ counter *identifier* (the field
+#: name Word uses for the counter, e.g. ``SEQ 图``). Off by default -- the counter
+#: name stays the stable English identifier unless one of these is given.
+_SEQ_KEYS = {
+    "figureseq": "Figure",
+    "tableseq": "Table",
+    "equationseq": "Equation",
+    "algorithmseq": "Algorithm",
+}
+
 
 @dataclass(frozen=True)
 class CaptionConfig:
@@ -64,6 +74,9 @@ class CaptionConfig:
     section_sep: str = "."
     delim: str = ": "
     eq_wrap: tuple[str, str] = ("(", ")")
+    #: per-kind SEQ counter identifier override ("Figure" -> "图"); a kind absent
+    #: here keeps its canonical English identifier (the default for every kind).
+    seq_names: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def english(cls) -> CaptionConfig:
@@ -122,6 +135,7 @@ class CaptionConfig:
         if not overrides:
             return self
         labels = dict(self.labels)
+        seq_names = dict(self.seq_names)
         label_number_sep = self.label_number_sep
         section_sep = self.section_sep
         delim = self.delim
@@ -129,6 +143,8 @@ class CaptionConfig:
         for key, value in overrides.items():
             if key in _LABEL_KEYS:
                 labels[_LABEL_KEYS[key]] = value
+            elif key in _SEQ_KEYS:
+                seq_names[_SEQ_KEYS[key]] = value
             elif key == "labelsep":
                 label_number_sep = value
             elif key == "sectionsep":
@@ -140,10 +156,20 @@ class CaptionConfig:
             elif key == "eqclose":
                 eq_close = value
         return replace(
-            self, labels=labels, label_number_sep=label_number_sep,
+            self, labels=labels, seq_names=seq_names,
+            label_number_sep=label_number_sep,
             section_sep=section_sep, delim=delim, eq_wrap=(eq_open, eq_close),
         )
 
     def label(self, counter: str) -> str:
         """Displayed label word for a SEQ ``counter`` (falls back to the name)."""
         return self.labels.get(counter, counter)
+
+    def seq_name(self, kind: str) -> str:
+        """The SEQ counter identifier to emit for a caption *kind*.
+
+        Defaults to the canonical kind ("Figure"/"Table"/"Equation"/"Algorithm");
+        a ``\\texwordcaption{figureseq}{...}`` override changes the identifier Word
+        uses for the counter (and the matching ``\\listoffigures`` ``\\c`` reference,
+        kept in lock-step so the list still builds)."""
+        return self.seq_names.get(kind, kind)
