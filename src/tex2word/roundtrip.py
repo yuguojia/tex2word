@@ -16,7 +16,7 @@ import json
 import os
 import re
 import zipfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from . import ir
@@ -66,7 +66,11 @@ def recover_ir(docx_bytes: bytes) -> ir.Document | None:
     return ir.Document.from_dict(payload["ir"])
 
 
-def to_latex(docx_bytes: bytes, reconcile: bool = True) -> str | None:
+def to_latex(
+    docx_bytes: bytes, reconcile: bool = True,
+    kept: list[KeptManifestBlock] | None = None,
+    annotate: bool = False,
+) -> str | None:
     """Convert a ``.docx`` back to LaTeX.
 
     Prefers the embedded tex2word manifest (exact IR, original math/figure
@@ -78,6 +82,10 @@ def to_latex(docx_bytes: bytes, reconcile: bool = True) -> str | None:
     ``reconcile=False`` to emit the manifest verbatim and ignore the body. For a
     *foreign* ``.docx`` (no manifest) it always reads ``document.xml``
     structurally. Returns ``None`` only if the document can't be read at all.
+
+    Pass a list as ``kept`` to collect the manifest blocks reconcile retained
+    verbatim inside an edited region (stale-risk content to proof-read); pass
+    ``annotate=True`` to also flag those spots with a ``%`` comment in the .tex.
 
     See ``reconcile/`` for the investigation, the Go/No-go, and the design.
     """
@@ -98,7 +106,7 @@ def to_latex(docx_bytes: bytes, reconcile: bool = True) -> str | None:
         current = read_docx(docx_bytes, label_map=label_map)
     except Exception:
         return write_latex(manifest_doc)
-    merged = reconcile_blocks(manifest_doc.blocks, current.blocks)
+    merged = reconcile_blocks(manifest_doc.blocks, current.blocks, kept=kept, annotate=annotate)
     # keep every document-level attribute from the manifest (meta, labels, the
     # book flag, ...) -- only the block list is reconciled.
     merged_doc = replace(manifest_doc, blocks=merged)
@@ -186,13 +194,75 @@ def _block_signature(block: ir.Block) -> tuple[str, str]:
         )
         return ("table", _norm(text))
     if isinstance(block, ir.Figure):
-        cap = _norm(_prose_text(block.caption or []))
-        img = block.image.path if block.image else ""
-        return ("figure", cap + img)
+        # type-only: the reader can recover neither the image *path* (manifest- /
+        # alt-text-only, often stripped by Word/WPS) nor reliably the caption (its
+        # paragraph may use a localised "Caption" style the reader misses), so any
+        # content key would mismatch every unedited figure and drag its neighbour
+        # paragraphs into a kept-manifest region. Align figures by position.
+        return ("figure", "")
     return (type(block).__name__, "")
 
 
-def reconcile_blocks(original: list[ir.Block], current: list[ir.Block]) -> list[ir.Block]:
+@dataclass
+class KeptManifestBlock:
+    """A manifest block reconcile retained verbatim inside a region Word *edited*.
+
+    These are the blocks where a Word edit could not be merged safely, so the
+    (possibly stale) manifest text was kept. Surfaced so the author can hand-check
+    them against the Word document. ``snippet`` is a short prose/caption excerpt
+    and ``reason`` explains why the manifest was preferred.
+    """
+
+    kind: str
+    snippet: str
+    reason: str
+
+
+def _kept_kind(block: ir.Block) -> str:
+    return {
+        ir.Paragraph: "paragraph", ir.Heading: "heading", ir.Figure: "figure",
+        ir.Table: "table", ir.MathBlock: "equation",
+    }.get(type(block), type(block).__name__)
+
+
+def _kept_snippet(block: ir.Block) -> str:
+    """A short human-readable excerpt of a block, for the kept-blocks report."""
+    if isinstance(block, ir.Paragraph | ir.Heading):
+        return _prose_text(block.inlines)[:60]
+    if isinstance(block, ir.MathBlock):
+        return block.latex[:60]
+    if isinstance(block, ir.Figure):
+        return _prose_text(block.caption or [])[:60] or (
+            block.image.path if block.image else "")
+    if isinstance(block, ir.Table):
+        for r in block.rows:
+            for c in r.cells:
+                for b in c.blocks:
+                    if isinstance(b, ir.Paragraph) and _prose_text(b.inlines):
+                        return _prose_text(b.inlines)[:60]
+    return ""
+
+
+#: LaTeX-comment markers injected when ``annotate=True`` so the recovered .tex
+#: flags reconcile decisions the author should hand-check.
+#: format template -- ``{kind}``/``{reason}`` mirror the matching
+#: ``reconcile_report.json`` entry so each kept block's inline comment explains
+#: *which* block was kept and *why* (not just that one was).
+_KEPT_NOTE = (
+    "% [tex2word] {kind} kept verbatim from the manifest — {reason}; "
+    "please proof-read this block against the .docx"
+)
+_DROPPED_NOTE = (
+    "% [tex2word] Word inserted {n} block(s) here that could not be recognised "
+    "(non-prose structure) — skipped"
+)
+
+
+def reconcile_blocks(
+    original: list[ir.Block], current: list[ir.Block],
+    kept: list[KeptManifestBlock] | None = None,
+    annotate: bool = False,
+) -> list[ir.Block]:
     """Merge the exact ``original`` (manifest) blocks with ``current`` (edited).
 
     **Manifest-biased anchored merge** — both signature-stable (an unedited
@@ -202,17 +272,26 @@ def reconcile_blocks(original: list[ir.Block], current: list[ir.Block]) -> list[
     - ``equal`` → the exact ``original`` block (with any review *comments* the
       reviewer added to the matching read-back paragraph grafted on, so notes on
       otherwise-unchanged text survive).
-    - ``replace`` of a single paragraph by a single paragraph → ``current`` (a
-      genuine prose edit; the reader is faithful for prose).
-    - any other ``replace`` (math/table/figure/bibliography, or N:M block
-      counts) → keep ``original`` — the lossless side; the read-back is the lossy
-      one, and an edit *inside* such a block can't be recovered faithfully anyway.
+    - ``replace`` of paragraphs by paragraphs → reconcile **pairwise** (1:1, and
+      N:N too): each pure-prose paragraph takes ``current``'s text, each mixed
+      paragraph is inline-merged (exact manifest math/footnote/image kept). An
+      N:M paragraph run (a genuine split/merge) takes ``current`` when the whole
+      manifest run is pure prose, else keeps the lossless manifest.
+    - any ``replace`` touching a non-paragraph block (math/table/figure/
+      bibliography) → keep ``original`` — the lossless side; an edit *inside* such
+      a block can't be recovered faithfully anyway.
     - ``insert`` → take an insertion only when the whole run is paragraphs (a
       genuine prose insertion); a run mixing a non-paragraph block in is a lossy
       read-back artifact (bibliography entries, figure-as-table, an align-split
       equation + its "where …" continuation) and is dropped.
     - ``delete`` → drop paragraphs the user removed; keep non-paragraph manifest
       blocks (a "missing" complex block is a reader miss, not a deletion).
+
+    When ``kept`` is given, every manifest block retained verbatim *inside an
+    edited region* is appended to it (a :class:`KeptManifestBlock`) so callers can
+    flag stale-risk content for manual proof-reading. With ``annotate=True`` the
+    same spots get an inline ``%`` comment in the recovered .tex (before each block
+    kept verbatim, and where an unrecognised Word insertion was skipped).
 
     See ``reconcile/`` for the investigation and the design rationale.
     """
@@ -227,6 +306,15 @@ def reconcile_blocks(original: list[ir.Block], current: list[ir.Block]) -> list[
         # paragraphs are kept from the manifest until inline reconcile lands.
         return isinstance(b, ir.Paragraph) and not _has_unreliable_inline(b.inlines)
 
+    def _keep(out: list[ir.Block], block: ir.Block, reason: str) -> None:
+        """Keep a manifest *block* verbatim: record it, optionally annotate, emit."""
+        if kept is not None:
+            kept.append(KeptManifestBlock(_kept_kind(block), _kept_snippet(block), reason))
+        if annotate:
+            note = _KEPT_NOTE.format(kind=_kept_kind(block), reason=reason)
+            out.append(ir.RawPassthrough(latex=note))
+        out.append(block)
+
     osig = [_block_signature(b) for b in original]
     csig = [_block_signature(b) for b in current]
     matcher = difflib.SequenceMatcher(a=osig, b=csig, autojunk=False)
@@ -234,63 +322,113 @@ def reconcile_blocks(original: list[ir.Block], current: list[ir.Block]) -> list[
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         orig_run, cur_run = original[i1:i2], current[j1:j2]
         if tag == "equal":
-            out.extend(_graft_comments(o, c) for o, c in zip(orig_run, cur_run, strict=True))
+            out.extend(
+                _reconcile_equal(o, c, _pure_prose)
+                for o, c in zip(orig_run, cur_run, strict=True)
+            )
         elif tag == "delete":
-            out.extend(b for b in orig_run if not _is_para(b))
+            for b in orig_run:
+                if not _is_para(b):
+                    _keep(out, b, "manifest-only block with no Word match — verify it "
+                                  "wasn't deleted (the reader may simply have missed it)")
         elif tag == "insert":
             # a genuine prose insertion is paragraphs-only; a run mixing in a
-            # non-paragraph block is a lossy read-back artifact -> drop it.
+            # non-paragraph block is a lossy read-back artifact -> drop it (but flag
+            # the spot so the author knows Word content was skipped here).
             if cur_run and all(_is_para(b) for b in cur_run):
                 out.extend(cur_run)
-        else:  # replace
-            if len(orig_run) == 1 and len(cur_run) == 1 \
-                    and _is_para(orig_run[0]) and _is_para(cur_run[0]):
-                if _pure_prose(orig_run[0]):
-                    out.append(cur_run[0])  # pure-prose paragraph: take Word's text
-                else:
-                    # mixed paragraph: merge the prose edit while keeping the exact
-                    # manifest math/footnote/image (inline reconcile); falls back to
-                    # the manifest when it can't merge safely.
-                    out.append(_reconcile_inline(orig_run[0], cur_run[0]))
-            else:
-                out.extend(orig_run)  # mixed/lossy region: keep the lossless manifest
+            elif cur_run and annotate:
+                out.append(ir.RawPassthrough(latex=_DROPPED_NOTE.format(n=len(cur_run))))
+        elif all(_is_para(b) for b in orig_run) and all(_is_para(b) for b in cur_run):
+            # all-paragraph replace -> reconcile pairwise so edits to *adjacent*
+            # paragraphs (an N:N run) are each picked up, not dropped wholesale.
+            _reconcile_para_run(out, orig_run, cur_run, _pure_prose, _keep)
+        else:
+            for b in orig_run:  # mixed/lossy region: keep the lossless manifest
+                _keep(out, b, "Word edited a region containing non-prose content — "
+                              "kept the exact manifest block")
     return out
+
+
+def _reconcile_para_run(
+    out: list[ir.Block], orig_run: list[ir.Block], cur_run: list[ir.Block],
+    pure_prose, keep,
+) -> None:
+    """Reconcile an all-paragraph ``replace`` run (manifest vs Word) into ``out``.
+
+    Equal counts pair 1:1 (pure prose -> Word's text; mixed -> inline merge);
+    an N:M run (a paragraph split/merge) takes Word's shape only when the whole
+    manifest run is pure prose, else keeps the lossless manifest."""
+    if len(orig_run) == len(cur_run):
+        for o, c in zip(orig_run, cur_run, strict=True):
+            if pure_prose(o):
+                out.append(c)  # pure-prose paragraph: take Word's edited text
+            else:
+                merged = _reconcile_inline(o, c)
+                if merged is o:  # inline merge couldn't apply -> manifest kept
+                    keep(out, o, "Word edited a paragraph with math/citations/refs "
+                                 "that can't be merged safely — kept the manifest")
+                else:
+                    out.append(merged)  # prose edit applied, manifest semantics kept
+        return
+    if all(pure_prose(b) for b in orig_run):
+        out.extend(cur_run)  # pure-prose restructure: trust Word's new paragraphs
+        return
+    for b in orig_run:
+        keep(out, b, "Word restructured a region containing non-prose content — "
+                     "kept the exact manifest block")
 
 
 # inline nodes whose exact manifest form we preserve and which inject no prose of
 # their own when rendered (so prose segments line up across manifest / read-back).
-_MERGE_SEMANTIC = (ir.Math, ir.DisplayMath, ir.Footnote, ir.Endnote, ir.Image)
-# inline nodes whose rendering injects prose (cite "[1]", cref "alg. ") or is
-# otherwise unmergeable -> keep the whole manifest paragraph.
-_INLINE_OPAQUE = (ir.Cite, ir.Ref, ir.RawInline)
+# Citations are anchors too: a CSL/Zotero field reads back as an ``ir.Cite`` node
+# at the same position with no injected prose, so it lines up; its *content* (the
+# keys) is always taken from the manifest, never the lossy read-back.
+_MERGE_SEMANTIC = (
+    ir.Math, ir.DisplayMath, ir.Footnote, ir.Endnote, ir.Image, ir.Cite,
+)
+# inline nodes that inject prose on read-back (a cleveref ``\cref`` renders a literal
+# "fig. "/"Theorem " prefix) or that the reader can't represent faithfully -> we
+# can't anchor on them, so keep the whole manifest paragraph.
+_INLINE_OPAQUE = (ir.Ref, ir.RawInline, ir.IndexEntry)
 
 
 def _reconcile_inline(original: ir.Block, current: ir.Block) -> ir.Block:
     """Merge a prose edit into a mixed paragraph, keeping exact manifest semantics.
 
-    Splits both paragraphs at their ``Math``/``Footnote``/``Image`` nodes; if the
-    semantic skeletons match, each prose segment is taken from ``current`` only
-    when it actually changed (else the exact manifest prose is kept), and the
-    semantic nodes are always the manifest's. Anything risky (a ``Ref``/``Cite``
-    whose rendering injects prose, a changed/extra semantic node) -> keep the
-    manifest paragraph unchanged. Guarantees an unedited paragraph -> itself.
+    Splits both paragraphs at their semantic nodes (math, footnotes, images,
+    citations, cross-refs). If the skeletons line up by *type* and count, each
+    prose segment is taken from ``current`` when its text changed -- a real edit,
+    **whitespace included** (so deleting the spaces between CJK and Latin is picked
+    up) -- and kept from the manifest otherwise; the semantic nodes are always the
+    manifest's exact ones (their content -- math spelling, cite keys, ref targets
+    -- never round-trips through the lossy read-back). A reorder/insert/delete of a
+    semantic node (count/type mismatch) or an unrepresentable inline (raw/index) ->
+    keep the manifest paragraph. Guarantees an unedited paragraph -> itself.
     """
     if not (isinstance(original, ir.Paragraph) and isinstance(current, ir.Paragraph)):
         return original
-    if _contains(original.inlines, _INLINE_OPAQUE):
+    if _contains(original.inlines, _INLINE_OPAQUE) or _contains(current.inlines, _INLINE_OPAQUE):
         return original
     o_prose, o_sem = _split_semantic(original.inlines)
     c_prose, c_sem = _split_semantic(current.inlines)
     if len(o_sem) != len(c_sem) or len(o_prose) != len(c_prose):
         return original
-    if any(_sem_key(a) != _sem_key(b) for a, b in zip(o_sem, c_sem, strict=True)):
+    if any(type(a) is not type(b) for a, b in zip(o_sem, c_sem, strict=True)):
         return original
     merged: list = []
+    changed = False
     for i, o_seg in enumerate(o_prose):
         c_seg = c_prose[i]
-        merged.extend(o_seg if _norm(_prose_text(o_seg)) == _norm(_prose_text(c_seg)) else c_seg)
+        if _prose_text(o_seg) == _prose_text(c_seg):
+            merged.extend(o_seg)  # segment unchanged -> exact manifest prose
+        else:
+            merged.extend(c_seg)  # genuine edit (incl. whitespace) -> Word's prose
+            changed = True
         if i < len(o_sem):
             merged.append(o_sem[i])
+    if not changed:
+        return original  # unedited -> the exact manifest paragraph (identity)
     return replace(original, inlines=merged)
 
 
@@ -320,16 +458,6 @@ def _split_semantic(inlines: list) -> tuple[list[list], list]:
     return segments, sem
 
 
-def _sem_key(n) -> tuple:
-    if isinstance(n, ir.Math):
-        return ("math", _math_sig(n.latex))
-    if isinstance(n, ir.DisplayMath):
-        return ("dmath", _math_sig(n.latex))
-    if isinstance(n, ir.Image):
-        return ("img", n.path)
-    return ("fn", _norm(_prose_text(n.inlines)))  # Footnote
-
-
 _UNRELIABLE = (
     ir.Math, ir.DisplayMath, ir.Cite, ir.Ref, ir.Footnote, ir.Endnote, ir.Image,
     ir.RawInline, ir.IndexEntry,
@@ -346,6 +474,30 @@ def _has_unreliable_inline(inlines: list) -> bool:
                 and _has_unreliable_inline(n.inlines):
             return True
     return False
+
+
+def _reconcile_equal(
+    original: ir.Block, current: ir.Block, pure_prose,
+) -> ir.Block:
+    """Reconcile a signature-matched (``equal``) block pair.
+
+    The reconcile signature ignores whitespace (so the reader's lossy re-spacing
+    around math/citations isn't mistaken for an edit), so a *genuine* whitespace-
+    only edit -- e.g. deleting the spaces between CJK and Latin/digits, common in
+    Chinese typesetting -- lands here, not in a ``replace``. When the raw prose
+    actually differs it is a real Word edit: a pure-prose paragraph takes Word's
+    text; a mixed paragraph (math/citations) is inline-merged so the edit applies
+    while the manifest's exact semantics are kept. Otherwise the exact manifest
+    block is kept (with the reviewer's comments grafted on either way).
+    """
+    if (isinstance(original, ir.Paragraph) and isinstance(current, ir.Paragraph)
+            and _prose_text(original.inlines) != _prose_text(current.inlines)):
+        if pure_prose(original):
+            return _graft_comments(current, original)  # whitespace/verbatim edit picked up
+        merged = _reconcile_inline(original, current)
+        if merged is not original:
+            return _graft_comments(merged, original)  # edit applied, semantics kept
+    return _graft_comments(original, current)
 
 
 def _graft_comments(original: ir.Block, current: ir.Block) -> ir.Block:

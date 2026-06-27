@@ -3,8 +3,24 @@
 from __future__ import annotations
 
 from tex2word import convert_source, ir
-from tex2word.frontend.docx_reader import read_docx
+from tex2word.frontend.docx_reader import _heading_levels_from_styles, read_docx
 from tex2word.roundtrip import to_latex
+
+
+def test_localised_heading_styles_recognised():
+    # WPS / localised Word save the built-in headings with numeric styleIds and a
+    # "heading N" w:name; the reader must map those to heading levels (not miss
+    # them and read a numbered heading as a list item).
+    styles = (
+        '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:style w:type="paragraph" w:styleId="1"><w:name w:val="heading 1"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="2"><w:name w:val="heading 2"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/></w:style>'
+        '<w:style w:type="paragraph" w:styleId="af3"><w:name w:val="Normal Indent"/></w:style>'
+        "</w:styles>"
+    ).encode()
+    levels = _heading_levels_from_styles(styles)
+    assert levels == {"1": 1, "2": 2, "Heading3": 3}
 
 
 def _foreign(src: str) -> ir.Document:
