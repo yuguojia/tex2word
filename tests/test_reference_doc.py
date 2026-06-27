@@ -241,6 +241,35 @@ def test_reference_styles_are_applied(tmp_path):
     assert 'w:styleId="SourceCode"' in styles  # merged in from our bundled set
 
 
+def test_texwordtemplate_directive_selects_reference(tmp_path):
+    # \texwordtemplate{...} (relative to the .tex dir) adopts the template styles.
+    ref = tmp_path / "tmpl.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordtemplate{tmpl.docx}"
+        r"\begin{document}\section{Intro}Body.\end{document}"
+    )
+    styles = _part(
+        convert_source(src, base_dir=str(tmp_path)).docx, "word/styles.xml"
+    ).decode()
+    assert 'w:val="FF0000"' in styles  # template's red Heading1 carried through
+
+
+def test_cli_reference_doc_overrides_texwordtemplate(tmp_path):
+    # The --reference-doc option wins over an in-source \texwordtemplate directive.
+    bad = tmp_path / "missing.docx"  # the directive points at a non-existent file
+    good = tmp_path / "good.docx"
+    good.write_bytes(_reference_docx())
+    src = (
+        rf"\texwordtemplate{{{bad}}}"
+        r"\begin{document}\section{Intro}Body.\end{document}"
+    )
+    result = convert_source(src, base_dir=str(tmp_path), reference_doc=str(good))
+    styles = _part(result.docx, "word/styles.xml").decode()
+    assert 'w:val="FF0000"' in styles  # the CLI template was used, not the directive
+    assert not any(w.construct == "reference-doc" for w in result.report.warnings)
+
+
 def test_reference_theme_is_carried(tmp_path):
     docx = _convert_with_reference(tmp_path)
     names = zipfile.ZipFile(io.BytesIO(docx)).namelist()
@@ -683,6 +712,68 @@ def test_body_style_defaults_to_normal_when_unbound(tmp_path):
     ref = tmp_path / "template.docx"
     ref.write_bytes(_reference_docx())
     src = r"\begin{document}Body text.\end{document}"
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Normal"' in doc
+    assert 'w:pStyle w:val="ni"' not in doc
+
+
+def test_texwordparstyle_sets_one_paragraph_style(tmp_path):
+    # \texwordparstyle{name} styles just the paragraph it precedes (like \noindent),
+    # naming a reference-doc style by its display name; the next paragraph is Normal.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"\texwordparstyle{部分标题}First paragraph." "\n\n"
+        r"Second paragraph."
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    # the styled paragraph adopts 部分标题 (styleId pt); the directive leaves no text
+    assert 'w:pStyle w:val="pt"' in doc
+    assert "部分标题" not in doc and "texwordparstyle" not in doc
+    # scope is one paragraph: the second paragraph keeps the bundled Normal
+    assert 'w:pStyle w:val="Normal"' in doc
+    assert doc.count('w:pStyle w:val="pt"') == 1
+
+
+def test_texwordparstyle_unknown_style_warns_and_falls_back(tmp_path):
+    # an unknown style name warns once and the paragraph keeps the default (Normal).
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"\texwordparstyle{NoSuchStyle}Body text."
+        r"\end{document}"
+    )
+    result = convert_source(src, reference_doc=str(ref))
+    doc = _part(result.docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="Normal"' in doc
+    assert any("texwordparstyle" in w.message for w in result.report.warnings)
+
+
+def test_noindent_adopts_bound_style(tmp_path):
+    # \texwordstyle{noindent}{name} makes every \noindent paragraph take that style;
+    # a paragraph without \noindent keeps the default (Normal). Scope is per-paragraph.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{noindent}{正文缩进}"
+        r"\begin{document}"
+        r"\noindent First paragraph." "\n\n"
+        r"Second paragraph."
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert doc.count('w:pStyle w:val="ni"') == 1   # only the \noindent paragraph
+    assert 'w:pStyle w:val="Normal"' in doc          # the plain paragraph stays Normal
+
+
+def test_noindent_dropped_when_unbound(tmp_path):
+    # without a \texwordstyle{noindent} binding, \noindent is dropped as before.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"\begin{document}\noindent Body text.\end{document}"
     doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
     assert 'w:pStyle w:val="Normal"' in doc
     assert 'w:pStyle w:val="ni"' not in doc

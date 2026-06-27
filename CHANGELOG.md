@@ -42,6 +42,77 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Per-paragraph Word style from the source.** A new `\texwordparstyle{Style Name}`
+  directive sets the Word paragraph style of the single paragraph it precedes —
+  the per-paragraph counterpart to `\texwordstyle{body}{…}` (which restyles *all*
+  body text). Its scope is exactly one paragraph, like `\noindent`, so the
+  following paragraphs keep their default style. The argument names a style in the
+  `--reference-doc` / `\texwordtemplate` template by its display name (what Word
+  shows); an unknown name warns and the paragraph keeps the default style. Under
+  pdfLaTeX add `\providecommand{\texwordparstyle}[1]{}` so the directive is a
+  no-op there.
+- **`\noindent` can adopt a Word style.** `\texwordstyle{noindent}{Style Name}` binds
+  `\noindent` to a reference-doc style, so every paragraph introduced by `\noindent`
+  takes that style (the global counterpart of the per-paragraph `\texwordparstyle`).
+  An explicit `\texwordparstyle` on the same paragraph still wins; with no binding
+  `\noindent` is dropped as before. Note tex2word does not expand user
+  `\renewcommand`, so `\noindent` cannot be rebound from the source itself — this
+  binding is the supported way to map it to a style.
+- **Word template selectable from the source.** A new `\texwordtemplate{TEMPLATE.docx}`
+  directive names the reference Word template from inside the `.tex` (path
+  relative to the source file), the in-source equivalent of `--reference-doc`.
+  The CLI `--reference-doc` option takes priority when both are given.
+- **TIFF and SVG figures now embed.** `\includegraphics` accepts `.tif`/`.tiff`
+  and `.svg` sources. TIFF embeds as an ordinary raster picture (intrinsic size
+  read from the TIFF header). SVG embeds as a vector picture via Word's
+  `asvg:svgBlip` extension; on-page size comes from the SVG's `width`/`height`
+  (or `viewBox`) at 96 dpi. No raster fallback is written — modern Word renders
+  the vector, and older viewers fall back to the same SVG part.
+- **Round-trip (`to-latex`) reconcile picks up more Word edits, and reports what
+  it could not.** Three fixes to the manifest-biased merge so edits made in Word
+  stop being silently dropped:
+  - **Localised / numeric heading styles are recognised.** WPS Office and
+    localised Word save the built-in headings with numeric styleIds (`"1"`–`"9"`)
+    and a `heading N` `w:name` rather than `Heading1`–`HeadingN`. The reader now
+    resolves heading level from the style's name (via `styles.xml`), so such
+    headings read back as headings (not list items). Previously the mismatch also
+    desynchronised the reconcile alignment, dragging whole sections into a
+    kept-manifest region.
+  - **Edits to adjacent paragraphs are no longer dropped.** `reconcile_blocks`
+    only took a Word `replace` when it was exactly one paragraph for one; editing
+    two neighbouring paragraphs (an N:N run) fell through to "keep the manifest",
+    so e.g. a sentence deleted in Word reappeared. Such runs are now reconciled
+    pairwise (pure prose → Word's text; mixed → inline merge).
+  - **Figures align by position, not by an unrecoverable image path.** The figure
+    reconcile signature dropped the image path/caption (which Word/WPS may strip),
+    so unedited figures no longer mismatch and pull their neighbours into a
+    kept-manifest region.
+  - **Whitespace-only prose edits are applied.** The reconcile signature ignores
+    whitespace (so the reader's re-spacing around math/citations isn't a false
+    edit), which masked a *genuine* whitespace-only edit -- e.g. deleting the
+    spaces between CJK and Latin/digits, common in Chinese editing. Such an edit is
+    now taken from Word instead of kept from the manifest.
+  - **Edits to paragraphs with math or citations are merged.** Inline reconcile
+    now anchors on citations (a CSL/Zotero field reads back as a node) as well as
+    math/footnotes/images, and lines anchors up by *type* rather than exact
+    content (the OMML->LaTeX spelling and cite keys are always taken from the
+    manifest). So a prose edit -- including whitespace -- in a paragraph that also
+    carries an equation or a `\citep` is applied, with the manifest's exact math
+    and keys preserved, instead of the whole paragraph being kept verbatim.
+    (`\cref`-style cross-refs, which inject a literal "fig. "/"Theorem " prefix on
+    read-back, are still kept-verbatim — they can't be anchored cleanly.)
+  - **New: `tex2word to-latex` annotates reconcile decisions inline by default.**
+    A `% [tex2word] …` comment is inserted before every block kept verbatim from the
+    manifest (a Word edit that couldn't be merged) and where an unrecognised Word
+    insertion was skipped, so they're easy to find and hand-merge. Each kept-block
+    comment names the block kind and carries the same reason as the
+    `--reconcile-report` JSON entry, so the inline note explains *which* block was
+    kept and *why*. Pass `--no-annotate` to suppress the comments for a clean .tex.
+    Exposed as `to_latex(..., annotate=True)` (library default off).
+  - **New: a kept-verbatim report.** `tex2word to-latex` now prints the manifest
+    blocks it kept inside an edited region (stale-risk content to proof-read), and
+    `--reconcile-report PATH` writes them as JSON. The Python `to_latex(..., kept=
+    [])` collects the same `KeptManifestBlock` records.
 - **`\texwordstyle{body}{…}` restyles ordinary body text (正文).** A new role sets
   the paragraph style of plain body-text paragraphs, previously hardcoded to
   `Normal`: `\texwordstyle{body}{正文缩进}` makes 正文 use an indented

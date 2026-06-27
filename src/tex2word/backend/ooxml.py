@@ -20,6 +20,7 @@ NS = {
     "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
+    "asvg": "http://schemas.microsoft.com/office/drawing/2016/SVG/main",
     "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
     "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
 }

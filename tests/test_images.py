@@ -25,6 +25,29 @@ def _make_png(path, w, h):
     path.write_bytes(sig + ihdr + idat + iend)
 
 
+def _make_tiff(path, w, h):
+    # minimal little-endian TIFF: header + one IFD with width/height tags.
+    header = b"II" + struct.pack("<HI", 42, 8)
+    entries = [
+        (256, 4, 1, w),   # ImageWidth  (LONG)
+        (257, 4, 1, h),   # ImageLength (LONG)
+    ]
+    ifd = struct.pack("<H", len(entries))
+    for tag, typ, cnt, val in entries:
+        ifd += struct.pack("<HHII", tag, typ, cnt, val)
+    ifd += struct.pack("<I", 0)  # next-IFD offset
+    path.write_bytes(header + ifd)
+
+
+def _make_svg(path, w, h, unit="px"):
+    path.write_text(
+        f'<svg width="{w}{unit}" height="{h}{unit}" '
+        f'viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg">'
+        f'<rect width="{w}" height="{h}" fill="#abc"/></svg>',
+        encoding="utf-8",
+    )
+
+
 def test_probe_png_dimensions(tmp_path):
     p = tmp_path / "x.png"
     _make_png(p, 120, 90)
@@ -32,6 +55,43 @@ def test_probe_png_dimensions(tmp_path):
     assert info is not None
     assert (info.width_px, info.height_px) == (120, 90)
     assert info.embeddable
+
+
+def test_probe_tiff_dimensions(tmp_path):
+    p = tmp_path / "x.tif"
+    _make_tiff(p, 2100, 2429)
+    info = images.probe(str(p))
+    assert info is not None
+    assert info.fmt == "tif"
+    assert (info.width_px, info.height_px) == (2100, 2429)
+    assert info.embeddable  # Word embeds TIFF like a raster
+
+
+def test_probe_svg_dimensions(tmp_path):
+    p = tmp_path / "x.svg"
+    _make_svg(p, 200, 160)
+    info = images.probe(str(p))
+    assert info is not None
+    assert info.fmt == "svg"
+    assert (info.width_px, info.height_px) == (200, 160)
+    assert not info.embeddable  # SVG goes through the vector-blip path
+
+
+def test_probe_svg_viewbox_fallback(tmp_path):
+    p = tmp_path / "x.svg"
+    p.write_text(
+        '<svg viewBox="0 0 152 123" xmlns="http://www.w3.org/2000/svg"></svg>',
+        encoding="utf-8",
+    )
+    info = images.probe(str(p))
+    assert info is not None and (info.width_px, info.height_px) == (152, 123)
+
+
+def test_probe_svg_pt_units_to_px(tmp_path):
+    p = tmp_path / "x.svg"
+    _make_svg(p, 72, 72, unit="pt")  # 72pt == 96px at 96 dpi
+    info = images.probe(str(p))
+    assert info is not None and (info.width_px, info.height_px) == (96, 96)
 
 
 def test_probe_missing_file():
@@ -73,6 +133,47 @@ def test_figure_embeds_image(tmp_path):
     )
 
 
+def test_tiff_embeds_as_plain_blip(tmp_path):
+    _make_tiff(tmp_path / "fig.tif", 800, 600)
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"\begin{document}\includegraphics{fig.tif}\end{document}", encoding="utf-8"
+    )
+    _, result = convert_file(str(tex))
+    zf = zipfile.ZipFile(io.BytesIO(result.docx))
+    assert "word/media/image1.tif" in zf.namelist()
+    ctypes = zf.read("[Content_Types].xml").decode()
+    assert 'Extension="tif" ContentType="image/tiff"' in ctypes
+    assert "media/image1.tif" in zf.read("word/_rels/document.xml.rels").decode()
+    root = etree.fromstring(zf.read("word/document.xml"))
+    # plain raster blip, no SVG extension
+    assert root.xpath("//a:blip", namespaces=_A_NS)
+    assert not root.xpath("//asvg:svgBlip", namespaces=_SVG_NS)
+
+
+def test_svg_embeds_with_svgblip_extension(tmp_path):
+    _make_svg(tmp_path / "fig.svg", 200, 160)
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"\begin{document}\includegraphics{fig.svg}\end{document}", encoding="utf-8"
+    )
+    _, result = convert_file(str(tex))
+    zf = zipfile.ZipFile(io.BytesIO(result.docx))
+    assert "word/media/image1.svg" in zf.namelist()
+    ctypes = zf.read("[Content_Types].xml").decode()
+    assert 'Extension="svg" ContentType="image/svg+xml"' in ctypes
+    assert "media/image1.svg" in zf.read("word/_rels/document.xml.rels").decode()
+    root = etree.fromstring(zf.read("word/document.xml"))
+    blip = root.xpath("//a:blip", namespaces=_A_NS)[0]
+    svgblip = root.xpath("//asvg:svgBlip", namespaces=_SVG_NS)
+    assert svgblip, "SVG must carry an asvg:svgBlip extension"
+    # primary blip and svgBlip reference the same SVG part (no PNG fallback)
+    assert svgblip[0].get(_R_EMBED) == blip.get(_R_EMBED)
+    # extent honours the SVG's declared size at 96 dpi
+    ext = root.xpath("//wp:extent", namespaces=_A_NS)[0]
+    assert ext.get("cx") == str(200 * images.EMU_PER_PX)
+
+
 def test_missing_image_degrades_gracefully(tmp_path):
     tex = tmp_path / "main.tex"
     tex.write_text(
@@ -90,6 +191,8 @@ from tex2word.frontend import parse_document  # noqa: E402
 
 _A_NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
          "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"}
+_SVG_NS = {"asvg": "http://schemas.microsoft.com/office/drawing/2016/SVG/main"}
+_R_EMBED = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
 
 
 def _convert(tmp_path, body):

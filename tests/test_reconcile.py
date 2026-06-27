@@ -6,7 +6,7 @@ import io
 import zipfile
 
 from tex2word import convert_source, ir
-from tex2word.roundtrip import reconcile_blocks, to_latex
+from tex2word.roundtrip import _prose_text, reconcile_blocks, to_latex
 
 SRC = r"""\begin{document}
 \section{Intro}
@@ -68,6 +68,89 @@ def test_reconcile_blocks_takes_insertions_and_drops_deletions():
     merged = reconcile_blocks(orig, cur)
     texts = [b.inlines[0].value for b in merged if isinstance(b, ir.Paragraph)]
     assert texts == ["one", "inserted"]
+
+
+def test_reconcile_picks_up_edits_to_adjacent_paragraphs():
+    # an N:N replace (two *adjacent* prose paragraphs both edited) must apply both
+    # edits, not drop the whole run and keep the manifest (the deleted-sentence bug).
+    orig = [ir.Paragraph([ir.Text("alpha one")]), ir.Paragraph([ir.Text("beta two")])]
+    cur = [ir.Paragraph([ir.Text("alpha EDITED")]), ir.Paragraph([ir.Text("beta two three")])]
+    merged = reconcile_blocks(orig, cur)
+    texts = [b.inlines[0].value for b in merged if isinstance(b, ir.Paragraph)]
+    assert texts == ["alpha EDITED", "beta two three"]
+
+
+def test_reconcile_picks_up_a_whitespace_only_edit_in_prose():
+    # editing Chinese prose often just deletes the spaces around Latin/digits. The
+    # reconcile signature ignores whitespace (so the reader's re-spacing isn't a
+    # false edit), so this lands as an `equal` pair -- but a genuine whitespace-only
+    # edit to pure prose must still be taken from Word, not silently dropped.
+    orig = [ir.Paragraph([ir.Text("高性能 CNT 沟道 is good")])]
+    cur = [ir.Paragraph([ir.Text("高性能CNT沟道 is good")])]
+    assert _block_signature(orig[0]) == _block_signature(cur[0])  # matched as "equal"
+    merged = reconcile_blocks(orig, cur)
+    assert merged[0].inlines[0].value == "高性能CNT沟道 is good"
+
+
+def test_reconcile_applies_prose_edit_in_a_math_paragraph():
+    # a paragraph with inline math, prose expanded in Word: the edit is applied AND
+    # the manifest's exact math (not the lossy OMML read-back) is kept.
+    orig = [ir.Paragraph([ir.Text("the ratio "), ir.Math(r"I_{\mathrm{D}}"),
+                          ir.Text(" is small here")])]
+    cur = [ir.Paragraph([ir.Text("the ratio "), ir.Math("{I}_{D}"),
+                         ir.Text(" is VERY small here")])]
+    merged = reconcile_blocks(orig, cur)
+    p = merged[0]
+    assert any(isinstance(n, ir.Math) and n.latex == r"I_{\mathrm{D}}" for n in p.inlines)
+    assert any(isinstance(n, ir.Text) and "VERY" in n.value for n in p.inlines)
+
+
+def test_reconcile_applies_whitespace_edit_in_a_cite_paragraph():
+    # deleting the spaces around a citation (whitespace-only) is signature-equal but
+    # must still be applied, with the manifest's exact cite keys kept.
+    orig = [ir.Paragraph([ir.Text("研究 "), ir.Cite(["mykey"]), ir.Text(" 表明此事")])]
+    cur = [ir.Paragraph([ir.Text("研究"), ir.Cite(["mykey"]), ir.Text("表明此事")])]
+    merged = reconcile_blocks(orig, cur)
+    p = merged[0]
+    assert any(isinstance(n, ir.Cite) and n.keys == ["mykey"] for n in p.inlines)
+    assert _prose_text(p.inlines) == "研究表明此事"  # spaces removed as in Word
+
+
+def test_annotate_marks_a_kept_block():
+    # a cite paragraph whose Word read-back has the cite as plain text "[1]" can't be
+    # merged (anchor count mismatch) -> kept; `annotate` flags it inline.
+    orig = [ir.Paragraph([ir.Text("a"), ir.Cite(["k"]), ir.Text(" original tail")])]
+    cur = [ir.Paragraph([ir.Text("a [1] rewritten tail")])]
+    kept: list = []
+    merged = reconcile_blocks(orig, cur, kept=kept, annotate=True)
+    raws = [b.latex for b in merged if isinstance(b, ir.RawPassthrough)]
+    assert any("kept verbatim" in r for r in raws)
+    # the inline comment mirrors the kept-blocks report: it names the block kind
+    # and carries the same reason, so it explains *which* block and *why*.
+    assert kept and any(
+        f"{kept[0].kind} kept verbatim" in r and kept[0].reason in r for r in raws
+    )
+
+
+def test_annotate_marks_a_dropped_word_insertion():
+    # Word inserted a non-prose structure (a table) the reader can't merge -> dropped;
+    # `annotate` leaves a comment at the spot.
+    orig = [ir.Paragraph([ir.Text("keep me")])]
+    cur = [ir.Paragraph([ir.Text("keep me")]), ir.Table(rows=[])]
+    merged = reconcile_blocks(orig, cur, annotate=True)
+    raws = [b.latex for b in merged if isinstance(b, ir.RawPassthrough)]
+    assert any("could not be recognised" in r for r in raws)
+
+
+def test_reconcile_reports_kept_manifest_blocks():
+    # a paragraph carrying a citation can't be merged on a prose edit -> the
+    # manifest is kept, and that fact is surfaced in the `kept` report.
+    orig = [ir.Paragraph([ir.Text("see "), ir.Cite(["k"]), ir.Text(" for the original detail")])]
+    cur = [ir.Paragraph([ir.Text("see [1] for the rewritten explanation")])]
+    kept: list = []
+    merged = reconcile_blocks(orig, cur, kept=kept)
+    assert merged[0] is orig[0]  # exact manifest paragraph kept (cite unmergeable)
+    assert len(kept) == 1 and kept[0].kind == "paragraph"
 
 
 # -- reconcile-on-by-default: unedited docs must reconcile to identity -------- #

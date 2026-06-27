@@ -118,7 +118,12 @@ The GUI depends on this package for the actual conversion, so everything in
 - **Reference Word templates** ★: `--reference-doc TEMPLATE.docx` adopts a
   journal/corporate template's styles, theme and page geometry (size + margins),
   so the output matches the required look — while keeping the live fields below.
-  Our custom styles are merged in so nothing renders unstyled.
+  Our custom styles are merged in so nothing renders unstyled. The template can
+  also be named from the source with `\texwordtemplate{TEMPLATE.docx}` (path
+  relative to the `.tex` file); the `--reference-doc` option takes priority.
+  `\texwordparstyle{Style Name}` sets the Word style of the single paragraph it
+  precedes (like `\noindent`, its scope is one paragraph), naming a template style
+  by its display name.
 - **Structure & styles**: `\title`/`\author`/`\date`/`abstract`, `\section`…
   `\subparagraph` → Word Title/Heading 1–4 (visible in the Navigation pane),
   paragraphs, `\textbf`/`\emph`/`\texttt`/`\underline`/`\textsc`, quotes, code.

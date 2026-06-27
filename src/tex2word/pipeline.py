@@ -51,7 +51,8 @@ def convert_source(
     ``frontend`` is ``"pure"`` (default, pylatexenc)
     or ``"latexml"`` (genuine TeX expansion; falls back to pure if unavailable).
     ``reference_doc`` is a path to a Word ``.docx`` whose styles, theme and page
-    geometry the output adopts (the journal/corporate "template" pattern).
+    geometry the output adopts (the journal/corporate "template" pattern); it
+    takes priority over an in-source ``\\texwordtemplate{...}`` directive.
     ``caption_locale`` (``auto``/``en``/``zh-CN``) sets the caption and
     cross-reference wording; ``auto`` picks Chinese (图/表 + ``-`` separator) when
     the document language is ``zh-CN`` or a CJK font is set.
@@ -81,7 +82,7 @@ def convert_source(
         if image_renderer is None:
             report.warn("math", "no math-image backend (install tex2word[mathimg] or TeX)")
 
-    reference = _load_reference(reference_doc, report)
+    reference = _load_reference(reference_doc, doc.meta.template_doc, base_dir, report)
     hf_refs, hf_parts, hf_rels, hf_extra = _header_footer_wiring(reference, report)
     if not hf_refs and doc.meta.running_head:
         # no template headers -> synthesise a running-head header + page footer
@@ -141,6 +142,7 @@ def convert_source(
         threeline_table_style_id=roles.threeline_table,
         body_style_id=roles.body,
         style_remap=roles.style_remap,
+        par_style_names=roles.par_style_names,
         caption_config=caption_config,
         cjk_quote_hint=cjk_quote_hint,
         num_ids=num_ids,
@@ -286,6 +288,9 @@ class _RoleStyles:
     threeline_table: str | None = None  # Word table style for a 三线表 (first cmd \toprule)
     body: str | None = None  # paragraph style for ordinary body-text (正文) paragraphs
     style_remap: dict = field(default_factory=dict)  # canonical styleId -> effective
+    # {lower-cased template style name -> effective styleId}: lets a per-paragraph
+    # \texwordparstyle{name} directive name any reference-doc style by display name.
+    par_style_names: dict = field(default_factory=dict)
 
     def caption_styles(self) -> dict:
         """{caption kind -> styleId}, each per-type override falling back to caption."""
@@ -335,6 +340,12 @@ def _resolve_role_styles(meta, reference, report: ConversionReport) -> "_RoleSty
         sid = name_to_id.get(name.strip().lower())
         return heading_rename.get(sid, sid) if sid else None
 
+    # every template style by display name -> effective styleId, for the
+    # per-paragraph \texwordparstyle{name} directive (resolved at write time).
+    styles.par_style_names = {
+        name: heading_rename.get(sid, sid) for name, sid in name_to_id.items()
+    }
+
     for role, name in overrides.items():
         sid = resolve(name)
         if sid is None:
@@ -356,16 +367,33 @@ def _resolve_role_styles(meta, reference, report: ConversionReport) -> "_RoleSty
     return styles
 
 
-def _load_reference(reference_doc: str | None, report: ConversionReport):
-    """Load a ``--reference-doc`` template, or warn + fall back to the bundled styles."""
-    if not reference_doc:
+def _load_reference(
+    reference_doc: str | None,
+    template_doc: str | None,
+    base_dir: str,
+    report: ConversionReport,
+):
+    """Load the Word reference template, or warn + fall back to the bundled styles.
+
+    The CLI ``--reference-doc`` (``reference_doc``) takes priority over an
+    in-source ``\\texwordtemplate{...}`` directive (``template_doc``); a relative
+    ``\\texwordtemplate`` path is resolved against the ``.tex`` file's directory.
+    """
+    path = reference_doc
+    if path is None and template_doc:
+        path = (
+            template_doc
+            if os.path.isabs(template_doc)
+            else os.path.join(base_dir, template_doc)
+        )
+    if not path:
         return None
     from .templates.reference import extract_reference
 
     try:
-        with open(reference_doc, "rb") as fh:
+        with open(path, "rb") as fh:
             ref = extract_reference(fh.read())
-        report.info("reference-doc", f"using template styles from {reference_doc}")
+        report.info("reference-doc", f"using template styles from {path}")
         return ref
     except (OSError, ValueError) as exc:
         report.warn("reference-doc", f"ignored ({exc}); used the built-in styles")

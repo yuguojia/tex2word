@@ -239,6 +239,7 @@ class Heading(Node):
 class Paragraph(Node):
     inlines: list[Inline]
     align: str | None = None  # "center"/"left"/"right" from center/flushleft/flushright
+    style: str | None = None  # \texwordparstyle{name}: per-paragraph reference-doc style
 
 
 @dataclass
@@ -444,6 +445,13 @@ class DocumentMeta(Node):
     # \texwordcaption{key}{value}: override caption/cross-ref wording (label word,
     # separators, delimiter, equation parens) -- see backend.caption_config.
     caption_overrides: dict[str, str] = field(default_factory=dict)
+    # \texwordtemplate{path.docx}: in-source Word reference template, resolved
+    # relative to the .tex file. The CLI --reference-doc option takes priority.
+    template_doc: str | None = None
+    # \texwordtemplate[keep]{path.docx}: keep the template's *content* and splice
+    # the converted body at its ``tex2word_section`` bookmark, instead of lifting
+    # only the template's styling onto a fresh document.
+    template_keep_content: bool = False
 
 
 @dataclass

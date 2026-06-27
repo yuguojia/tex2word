@@ -232,6 +232,8 @@ _IGNORE_MACROS = {
     "renewcommand", "newcommand", "providecommand",
     "setitemize", "setenumerate", "hyphenation", "settopmatter",
     "texwordstyle",  # tex2word style-binding directive: scanned separately, no output
+    "texwordtemplate",  # tex2word reference-template directive: scanned separately
+    "texwordparstyle",  # tex2word per-paragraph style: handled at block level, else dropped
     # grouping / layout / counter declarations -> drop (args consumed by specs)
     "begingroup", "endgroup", "bgroup", "egroup",
     "AddToShipoutPicture", "ClearShipoutPicture",
@@ -395,6 +397,10 @@ class _Builder:
         self.nocite_keys: list[str] = []  # \nocite{key} / \nocite{*}
         self.book_mode = False  # book/report class: \chapter is the top level
         self.in_appendix = False  # seen \appendix -> later sections use letters
+        # \texwordparstyle{name}: Word style for the next paragraph flushed (then cleared)
+        self._pending_par_style: str | None = None
+        # \texwordstyle{noindent}{name}: Word style every \noindent paragraph adopts
+        self.noindent_style: str | None = None
         # \footnotemark placeholders awaiting their \footnotetext{...} content
         self._pending_footmarks: list[ir.Footnote] = []
         # theorem-like environment name -> display title (built-ins + \newtheorem)
@@ -818,8 +824,12 @@ class _Builder:
             if any(not (isinstance(x, ir.Text) and not x.value.strip()) for x in inline_buf):
                 cleaned = _clean_inlines(inline_buf.copy(), trim=True)
                 if cleaned:
-                    _flush_cleaned(cleaned, out)
+                    _flush_cleaned(cleaned, out, style=self._pending_par_style)
             inline_buf.clear()
+            # \texwordparstyle only styles the paragraph it precedes, so its scope
+            # ends at this flush (a heading/environment between it and a paragraph
+            # flushes an empty buffer and clears the pending style too).
+            self._pending_par_style = None
 
         for node in nodes:
             if isinstance(node, LatexCharsNode):
@@ -966,6 +976,20 @@ class _Builder:
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname in _EMPHASIS_DECL:
                 scope_marks.append((len(inline_buf), "emph", _EMPHASIS_DECL[node.macroname]))
+                continue
+            # \texwordparstyle{name}: remember the Word style for the paragraph this
+            # directive sits in; flush() stamps it on that paragraph and clears it.
+            if isinstance(node, LatexMacroNode) and node.macroname == "texwordparstyle":
+                name = _chars_of(_group_nodes(node)).strip()
+                if name:
+                    self._pending_par_style = name
+                continue
+            # \noindent: dropped as before, unless \texwordstyle{noindent}{name} bound
+            # it to a Word style -- then the paragraph it precedes adopts that style
+            # (an explicit \texwordparstyle on the same paragraph still wins).
+            if isinstance(node, LatexMacroNode) and node.macroname == "noindent":
+                if self.noindent_style and self._pending_par_style is None:
+                    self._pending_par_style = self.noindent_style
                 continue
             # otherwise inline content
             self._inline_node(node, inline_buf)
@@ -1641,7 +1665,9 @@ def _clean_inlines(nodes: list[ir.Inline], *, trim: bool = False) -> list[ir.Inl
     return merged
 
 
-def _flush_cleaned(cleaned: list[ir.Inline], out: list[ir.Block]) -> None:
+def _flush_cleaned(
+    cleaned: list[ir.Inline], out: list[ir.Block], *, style: str | None = None
+) -> None:
     """Emit a finished paragraph's inlines as one or more blocks.
 
     A paragraph that carries a display equation *alongside* text becomes a single
@@ -1649,28 +1675,31 @@ def _flush_cleaned(cleaned: list[ir.Inline], out: list[ir.Block]) -> None:
     paragraph, joined to the text by soft line breaks. A paragraph whose only real
     content is display math degrades back to standalone :class:`ir.MathBlock`s, so
     an isolated equation (blank line on both sides) renders exactly as before.
+
+    ``style`` is a ``\\texwordparstyle`` per-paragraph Word style name; it is set on
+    every :class:`ir.Paragraph` this flush produces (display math stays unstyled).
     """
     if not any(isinstance(x, ir.DisplayMath) for x in cleaned):
-        out.append(ir.Paragraph(cleaned))
+        out.append(ir.Paragraph(cleaned, style=style))
         return
     # only keep the equation inline with its paragraph when genuine prose text
     # surrounds it (the "说明文字" case); otherwise an equation flanked solely by
     # other inlines (e.g. inline math) keeps the historical block split.
     has_prose = any(isinstance(x, ir.Text) and x.value.strip() for x in cleaned)
     if has_prose:
-        out.append(ir.Paragraph(_trim_around_display_math(cleaned)))
+        out.append(ir.Paragraph(_trim_around_display_math(cleaned), style=style))
         return
     group: list[ir.Inline] = []
     for x in cleaned:
         if isinstance(x, ir.DisplayMath):
             if any(not (isinstance(g, ir.Text) and not g.value.strip()) for g in group):
-                out.append(ir.Paragraph(group))
+                out.append(ir.Paragraph(group, style=style))
             group = []
             out.append(x.to_block())
         else:
             group.append(x)
     if any(not (isinstance(g, ir.Text) and not g.value.strip()) for g in group):
-        out.append(ir.Paragraph(group))
+        out.append(ir.Paragraph(group, style=style))
 
 
 def _trim_around_display_math(inlines: list[ir.Inline]) -> list[ir.Inline]:
@@ -2084,6 +2113,10 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("AddToShipoutPicture", "*{"),
             # tex2word-only: bind a logical role to a Word style (consume 2 args).
             MacroSpec("texwordstyle", "{{"),
+            # tex2word-only: name a Word reference template (consume 1 arg).
+            MacroSpec("texwordtemplate", "{"),
+            # tex2word-only: set the current paragraph's Word style (consume 1 arg).
+            MacroSpec("texwordparstyle", "{"),
             MacroSpec("newcounter", "{["),
             MacroSpec("addtocounter", "{{"),
             MacroSpec("refstepcounter", "{"),
@@ -2477,6 +2510,9 @@ def parse_document(
     _collect_color_defs(expanded, builder.colors)  # \definecolor/\colorlet (preamble + body)
     _collect_acronyms(expanded, builder.acronyms)   # \newacronym (preamble + body)
     _collect_glossary_entries(expanded, builder.glossary)  # \newglossaryentry terms
+    # \texwordstyle{noindent}{name}: pre-scanned so \noindent paragraphs can adopt
+    # the bound style while blocks are built (style_overrides are detected later).
+    builder.noindent_style = _detect_noindent_style(source)
     blocks = builder.blocks(nodes)
     doc = ir.Document(blocks=blocks, meta=builder.meta, book=builder.book_mode)
 
@@ -2491,6 +2527,7 @@ def parse_document(
     # pdflatex ignores it) would otherwise expand the directive away before we see it.
     _detect_style_overrides(doc, source)  # \texwordstyle{role}{Word style name}
     _detect_caption_overrides(doc, source)  # \texwordcaption{key}{value}
+    _detect_template(doc, source)  # \texwordtemplate{path.docx}
     _resolve_bibliography(doc, builder, base_dir, report, csl_path)
     return doc, report
 
@@ -2560,6 +2597,10 @@ _CAPTION_OVERRIDE_KEYS = {
 _CAPTION_OVERRIDE_RE = re.compile(
     r"\\texwordcaption\s*\{([^}]*)\}\s*\{([^}]*)\}"
 )
+#: \texwordtemplate{path.docx}: in-source Word reference template path.
+_TEMPLATE_RE = re.compile(
+    r"\\texwordtemplate\s*\{([^}]*)\}"
+)
 
 
 def _detect_style_overrides(doc: ir.Document, source: str) -> None:
@@ -2589,6 +2630,21 @@ def _detect_style_overrides(doc: ir.Document, source: str) -> None:
             doc.meta.style_overrides[role] = name
 
 
+def _detect_noindent_style(source: str) -> str | None:
+    """The Word style ``\\noindent`` adopts, from ``\\texwordstyle{noindent}{name}``.
+
+    The global counterpart of the per-paragraph ``\\texwordparstyle{name}``: every
+    paragraph introduced by ``\\noindent`` takes the named reference-doc style. The
+    last binding wins; with no binding ``\\noindent`` is dropped as usual. The name
+    is resolved to a styleId at write time (an unknown name warns and falls back).
+    """
+    name: str | None = None
+    for m in _STYLE_OVERRIDE_RE.finditer(source):
+        if m.group(1).strip().lower() == "noindent" and m.group(2).strip():
+            name = m.group(2).strip()
+    return name
+
+
 def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
     """Pick up ``\\texwordcaption{key}{value}`` caption/cross-ref wording overrides.
 
@@ -2604,6 +2660,20 @@ def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
         key = m.group(1).strip().lower()
         if key in _CAPTION_OVERRIDE_KEYS:
             doc.meta.caption_overrides[key] = m.group(2)
+
+
+def _detect_template(doc: ir.Document, source: str) -> None:
+    """Pick up a ``\\texwordtemplate{path.docx}`` reference-template directive.
+
+    Names the Word ``.docx`` whose styles, theme and page geometry the output
+    adopts -- the in-source equivalent of ``--reference-doc``. A relative path is
+    resolved against the ``.tex`` file's directory. The CLI ``--reference-doc``
+    option takes priority when both are given. The last directive wins.
+    """
+    for m in _TEMPLATE_RE.finditer(source):
+        path = m.group(1).strip()
+        if path:
+            doc.meta.template_doc = path
 
 
 def _detect_language(preamble: str) -> str | None:

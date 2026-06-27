@@ -104,6 +104,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="emit the embedded manifest verbatim, ignoring any Word edits to the body",
     )
+    rev.add_argument(
+        "--reconcile-report",
+        default=None,
+        metavar="PATH",
+        help="write the kept-verbatim manifest blocks (stale-risk, to proof-read) as JSON",
+    )
+    rev.add_argument(
+        "--no-annotate",
+        action="store_true",
+        help="suppress the inline reconcile comments (on by default): a %% comment is "
+             "otherwise inserted before each block kept verbatim from the manifest "
+             "(naming the block kind and the same reason as --reconcile-report), and "
+             "where an unrecognised Word insertion was skipped",
+    )
 
     args = parser.parse_args(argv)
 
@@ -119,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _cmd_to_latex(args: argparse.Namespace) -> int:
-    from .roundtrip import to_latex
+    from .roundtrip import KeptManifestBlock, to_latex
 
     try:
         with open(args.input, "rb") as fh:
@@ -127,7 +141,12 @@ def _cmd_to_latex(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         print(f"error: input file not found: {args.input}", file=sys.stderr)
         return 2
-    latex = to_latex(data, reconcile=not args.no_reconcile)
+    reconcile = not args.no_reconcile
+    kept: list[KeptManifestBlock] = []
+    latex = to_latex(
+        data, reconcile=reconcile,
+        kept=kept if reconcile else None, annotate=reconcile and not args.no_annotate,
+    )
     if latex is None:
         print("error: no round-trip manifest in this .docx", file=sys.stderr)
         return 1
@@ -137,7 +156,32 @@ def _cmd_to_latex(args: argparse.Namespace) -> int:
         print(f"wrote {args.output}", file=sys.stderr)
     else:
         print(latex)
+    _report_kept_blocks(kept, args.reconcile_report)
     return 0
+
+
+def _report_kept_blocks(kept: list, report_path: str | None) -> None:
+    """Tell the user which manifest blocks were kept verbatim inside an edited
+    region (stale-risk, worth a manual check), to stderr and optionally as JSON."""
+    if report_path:
+        import json
+        from dataclasses import asdict
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump([asdict(k) for k in kept], fh, ensure_ascii=False, indent=2)
+        print(f"wrote reconcile report: {report_path}", file=sys.stderr)
+    if not kept:
+        return
+    print(
+        f"note: {len(kept)} manifest block(s) were kept verbatim inside regions you "
+        "edited in Word\n      (Word's version could not be merged safely — "
+        "please proof-read these against the .docx):",
+        file=sys.stderr,
+    )
+    for k in kept:
+        snippet = k.snippet.strip().replace("\n", " ")
+        if len(snippet) >= 60:
+            snippet += "…"
+        print(f"  - [{k.kind}] {snippet!r}  ({k.reason})", file=sys.stderr)
 
 
 def _cmd_benchmark(args: argparse.Namespace) -> int:

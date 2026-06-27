@@ -28,6 +28,10 @@ _M = NS["m"]
 _HEADING_LEVEL = {
     "Heading1": 1, "Heading2": 2, "Heading3": 3, "Heading4": 4, "Heading5": 5,
 }
+#: a style whose *name* is "heading N" is a heading, whatever its styleId --
+#: localised Word / WPS Office save the built-in headings with numeric styleIds
+#: ("1".."9") and a "heading N" name, which the literal map above would miss.
+_HEADING_NAME = re.compile(r"^heading\s*([1-9])$", re.IGNORECASE)
 _TOC_TITLES = {"Contents", "List of Figures", "List of Tables"}
 #: must match tex2word.backend.document.{BIB,FIG}_SDT_TAG
 _BIB_SDT_TAG = "tex2word:bibliography"
@@ -153,9 +157,42 @@ def read_docx(docx_bytes: bytes, label_map: dict[str, str] | None = None) -> ir.
         _read_comments(zf.read("word/comments.xml"))
         if "word/comments.xml" in zf.namelist() else {}
     )
-    reader = _Reader(meta, comments, label_map)
+    heading_levels = dict(_HEADING_LEVEL)
+    if "word/styles.xml" in zf.namelist():
+        heading_levels.update(_heading_levels_from_styles(zf.read("word/styles.xml")))
+    reader = _Reader(meta, comments, label_map, heading_levels)
     blocks = reader.read_body(body if body is not None else root)
     return ir.Document(blocks=blocks, meta=meta)
+
+
+def _heading_levels_from_styles(styles_xml: bytes) -> dict[str, int]:
+    """{styleId -> heading level} for every paragraph style that *is* a heading.
+
+    A style counts as a heading when its literal id is a known ``HeadingN`` or its
+    ``w:name`` is ``"heading N"`` (the form localised Word / WPS Office write, with
+    a numeric ``styleId`` such as ``"2"``). Keying off the name -- not a bare
+    numeric id -- avoids misreading an unrelated ``styleId="2"`` as a heading.
+    """
+    out: dict[str, int] = {}
+    try:
+        root = etree.fromstring(styles_xml)
+    except Exception:
+        return out
+    for st in root.findall(_w("style")):
+        if (st.get(_w("type")) or "paragraph") != "paragraph":
+            continue
+        sid = st.get(_w("styleId"))
+        if not sid:
+            continue
+        if sid in _HEADING_LEVEL:
+            out[sid] = _HEADING_LEVEL[sid]
+            continue
+        name_el = st.find(_w("name"))
+        name = (name_el.get(_w("val")) if name_el is not None else "") or ""
+        m = _HEADING_NAME.match(name.strip())
+        if m:
+            out[sid] = int(m.group(1))
+    return out
 
 
 def _read_comments(comments_xml: bytes) -> dict[str, tuple[str, str]]:
@@ -178,10 +215,12 @@ class _Reader:
     def __init__(
         self, meta: ir.DocumentMeta, comments: dict[str, tuple[str, str]] | None = None,
         label_map: dict[str, str] | None = None,
+        heading_levels: dict[str, int] | None = None,
     ) -> None:
         self.meta = meta
         self.comments = comments or {}
         self.label_map = label_map or {}
+        self.heading_levels = heading_levels or dict(_HEADING_LEVEL)
 
     def _resolve_label(self, bookmark: str) -> str:
         """A sanitised bookmark -> the original label key (manifest map, else a
@@ -319,7 +358,7 @@ class _Reader:
         return st.get(_w("val")) if st is not None else None
 
     def _is_heading(self, p: etree._Element) -> bool:
-        return (self._style(p) or "") in _HEADING_LEVEL
+        return (self._style(p) or "") in self.heading_levels
 
     def _numpr(self, p: etree._Element) -> etree._Element | None:
         ppr = p.find(_w("pPr"))
@@ -365,9 +404,9 @@ class _Reader:
                 self.meta.abstract = []
             self.meta.abstract.append(ir.Paragraph(inlines))
             return None
-        if style in _HEADING_LEVEL:
+        if style in self.heading_levels:
             numbered = self._numpr(p) is not None
-            return ir.Heading(_HEADING_LEVEL[style], inlines, label=label, numbered=numbered)
+            return ir.Heading(self.heading_levels[style], inlines, label=label, numbered=numbered)
         if style == "Normal":
             thm = _theorem_block(inlines)
             if thm is not None:

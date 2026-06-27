@@ -68,6 +68,7 @@ class DocumentWriter:
         threeline_table_style_id: str | None = None,
         body_style_id: str | None = None,
         style_remap: dict[str, str] | None = None,
+        par_style_names: dict[str, str] | None = None,
         caption_config: CaptionConfig | None = None,
         cjk_quote_hint: bool = False,
         num_ids: NumIds | None = None,
@@ -98,6 +99,10 @@ class DocumentWriter:
         #: {canonical styleId -> effective styleId} for \texwordstyle paragraph-style
         #: roles (abstract/sourcecode/title/...): explicit binding or auto-discovery.
         self._style_remap = style_remap or {}
+        #: {lower-cased reference-doc style name -> styleId} for \texwordparstyle{name},
+        #: the per-paragraph style override; plus a dedupe set for "not found" warnings.
+        self._par_style_names = par_style_names or {}
+        self._warned_par_styles: set[str] = set()
         #: document preamble (for compiling TikZ pictures to images)
         self.preamble = preamble
         self.number_by_section = number_by_section
@@ -223,7 +228,7 @@ class DocumentWriter:
         if isinstance(block, ir.Heading):
             self._heading(block, body)
         elif isinstance(block, ir.Paragraph):
-            p = self._styled_paragraph(default_style)
+            p = self._styled_paragraph(self._par_style(block.style, default_style))
             if block.align:
                 self._set_align(p, block.align)
             self._inlines(block.inlines, p)
@@ -713,6 +718,14 @@ class DocumentWriter:
                 data = fh.read()
             return self._register_and_draw(data, info, name, max_width_emu, image)
 
+        # SVG embeds as a vector blip (no raster fallback); Word renders it via
+        # the asvg:svgBlip extension, older viewers fall back to the same part.
+        if fmt == "svg":
+            with open(path, "rb") as fh:
+                data = fh.read()
+            svg_info = info if info is not None else images.probe_bytes(data, "svg")
+            return self._register_and_draw(data, svg_info, name, max_width_emu, image)
+
         # vector formats (PDF/EPS): rasterise to PNG when a backend is available.
         if fmt in ("pdf", "eps", "ps"):
             result = raster.rasterize(path, fmt)
@@ -778,7 +791,11 @@ class DocumentWriter:
         rot = self._rotation(image)
         src_rect = self._src_rect(info, image)
         alt = (image.alt if image and image.alt else name)
-        return self._drawing(rel_id, cx, cy, draw_id, name, rot=rot, src_rect=src_rect, alt=alt)
+        svg_rel = rel_id if info.fmt == "svg" else None
+        return self._drawing(
+            rel_id, cx, cy, draw_id, name,
+            rot=rot, src_rect=src_rect, alt=alt, svg_rel=svg_rel,
+        )
 
     @staticmethod
     def _image_extent(
@@ -830,9 +847,12 @@ class DocumentWriter:
             "b": str(int(bottom / nat_cy * 100000)),
         }
 
+    #: fixed ext uri Word uses to attach an SVG vector blip to a picture.
+    _SVG_EXT_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+
     def _drawing(self, rel_id: str, cx: int, cy: int, n: int, name: str, *,
                  rot: int | None = None, src_rect: dict[str, str] | None = None,
-                 alt: str = "") -> _Element:
+                 alt: str = "", svg_rel: str | None = None) -> _Element:
         drawing = el("w:drawing")
         inline = sub(drawing, "wp:inline", **{
             "distT": "0", "distB": "0", "distL": "0", "distR": "0",
@@ -848,7 +868,10 @@ class DocumentWriter:
         sub(nv, "pic:cNvPr", id="0", name=name, descr=alt)
         sub(nv, "pic:cNvPicPr")
         blipfill = sub(pic, "pic:blipFill")
-        sub(blipfill, "a:blip", **{"r:embed": rel_id})
+        blip = sub(blipfill, "a:blip", **{"r:embed": rel_id})
+        if svg_rel is not None:
+            ext = sub(sub(blip, "a:extLst"), "a:ext", uri=self._SVG_EXT_URI)
+            sub(ext, "asvg:svgBlip", **{"r:embed": svg_rel})
         if src_rect is not None:
             sub(blipfill, "a:srcRect", **src_rect)
         stretch = sub(blipfill, "a:stretch")
@@ -1385,6 +1408,25 @@ class DocumentWriter:
         preserve_space(t)
         r.append(t)
         return r
+
+    def _par_style(self, name: str | None, default: str) -> str:
+        """Resolve a ``\\texwordparstyle{name}`` per-paragraph style to a styleId.
+
+        ``name`` is a reference-doc style's display name (case-insensitive); an
+        unknown name (or no template) warns once and falls back to *default*.
+        """
+        if not name:
+            return default
+        sid = self._par_style_names.get(name.strip().lower())
+        if sid is None:
+            if name not in self._warned_par_styles:
+                self._warned_par_styles.add(name)
+                self.report.warn(
+                    "reference-doc",
+                    f"\\texwordparstyle: style {name!r} not found in the reference template",
+                )
+            return default
+        return sid
 
     def _styled_paragraph(self, style: str) -> _Element:
         style = self._style_remap.get(style, style)  # \texwordstyle paragraph roles
