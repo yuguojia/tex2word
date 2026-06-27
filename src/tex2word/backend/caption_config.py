@@ -122,22 +122,27 @@ class CaptionConfig:
         if not overrides:
             return self
         labels = dict(self.labels)
-        kw: dict[str, object] = {}
+        label_number_sep = self.label_number_sep
+        section_sep = self.section_sep
+        delim = self.delim
         eq_open, eq_close = self.eq_wrap
         for key, value in overrides.items():
             if key in _LABEL_KEYS:
                 labels[_LABEL_KEYS[key]] = value
             elif key == "labelsep":
-                kw["label_number_sep"] = value
+                label_number_sep = value
             elif key == "sectionsep":
-                kw["section_sep"] = value
+                section_sep = value
             elif key == "delim":
-                kw["delim"] = value
+                delim = value
             elif key == "eqopen":
                 eq_open = value
             elif key == "eqclose":
                 eq_close = value
-        return replace(self, labels=labels, eq_wrap=(eq_open, eq_close), **kw)
+        return replace(
+            self, labels=labels, label_number_sep=label_number_sep,
+            section_sep=section_sep, delim=delim, eq_wrap=(eq_open, eq_close),
+        )
 
     def label(self, counter: str) -> str:
         """Displayed label word for a SEQ ``counter`` (falls back to the name)."""

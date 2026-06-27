@@ -8,9 +8,8 @@ import io
 import re
 import zipfile
 
-from tex2word import convert_source
+from tex2word import convert_source, ir
 from tex2word.frontend import parse_document
-from tex2word import ir
 
 _HINT = '<w:rFonts w:hint="eastAsia"/>'
 

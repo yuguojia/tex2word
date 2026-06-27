@@ -261,8 +261,9 @@ def reference_numbering(
     # our bundled abstractNumId for each role, read from our own num->abstractNum map.
     our_root = etree.fromstring(numbering_xml())
     our_fallback = {
-        num.get(_w("numId")): num.find(_w("abstractNumId")).get(_w("val"))
+        num.get(_w("numId")): anum.get(_w("val"))
         for num in our_root.findall(_w("num"))
+        if (anum := num.find(_w("abstractNumId"))) is not None
     }
     our_anums = {a.get(_w("abstractNumId")): a for a in our_root.findall(_w("abstractNum"))}
 
@@ -378,11 +379,11 @@ def _detect_list_anum(
         aid = a.get(_w("abstractNumId"))
         if aid in exclude:
             continue
-        lvl0 = next((l for l in a.findall(_w("lvl")) if l.get(_w("ilvl")) == "0"), None)
+        lvl0 = next((lv for lv in a.findall(_w("lvl")) if lv.get(_w("ilvl")) == "0"), None)
         if lvl0 is None:
             continue
         fmt_el = lvl0.find(_w("numFmt"))
-        fmt = (fmt_el.get(_w("val")) if fmt_el is not None else "").lower()
+        fmt = (fmt_el.get(_w("val")) or "" if fmt_el is not None else "").lower()
         if want_bullet and fmt == "bullet":
             return aid
         if not want_bullet and fmt in _ORDERED_FMTS:

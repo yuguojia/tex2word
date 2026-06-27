@@ -10,12 +10,12 @@ from lxml import etree
 from tex2word import convert_source
 from tex2word.backend.numbering import reference_numbering
 from tex2word.templates.reference import (
+    _separator_notes,
     extract_reference,
     merge_notes,
     merge_settings,
     merge_styles,
 )
-from tex2word.templates.reference import _separator_notes
 
 _W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -521,10 +521,10 @@ def test_numbering_heading_link_survives_localized_styleids():
         <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:pStyle w:val="1"/></w:lvl>
         <w:lvl w:ilvl="1"><w:numFmt w:val="decimal"/><w:pStyle w:val="2"/></w:lvl>
       </w:abstractNum></w:numbering>""".encode()
-    from tex2word.templates.reference import _compute_builtin_rename
     from lxml import etree
 
     from tex2word.backend.numbering import reference_num_ids
+    from tex2word.templates.reference import _compute_builtin_rename
 
     rename = _compute_builtin_rename(etree.fromstring(localized_styles.encode()))
     num_ids = reference_num_ids(ref_numbering)  # no template w:num -> floor at 1000
@@ -538,7 +538,6 @@ def test_carried_heading_style_keeps_its_template_numbering(tmp_path):
     # a template whose heading 1 style carries its OWN numId for a "第%1章" list:
     # the template's numbering is carried verbatim, so the style's numId stays
     # valid and the chapter numbering survives without any relinking.
-    import re
 
     from lxml import etree
 
@@ -786,7 +785,7 @@ def test_generic_paragraph_style_falls_back_when_absent(tmp_path):
     minimal = io.BytesIO()
     with zipfile.ZipFile(minimal, "w") as z:
         z.writestr("word/styles.xml", _REF_STYLES.replace(
-            '<w:style w:type="paragraph" w:styleId="abs"><w:name w:val="Abstract"/></w:style>'.encode(),
+            b'<w:style w:type="paragraph" w:styleId="abs"><w:name w:val="Abstract"/></w:style>',
             b"",
         ))
         z.writestr("word/document.xml", _REF_DOC)

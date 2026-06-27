@@ -130,7 +130,7 @@ class DisplayMath(Node):
     label: str | None = None
     env: str = "displaymath"
 
-    def to_block(self) -> "MathBlock":
+    def to_block(self) -> MathBlock:
         return MathBlock(latex=self.latex, numbered=self.numbered,
                          label=self.label, env=self.env)
 
