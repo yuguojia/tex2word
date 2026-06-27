@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+from lxml import etree
+
 from tex2word import convert_source
 from tex2word.backend.numbering import reference_numbering
 from tex2word.templates.reference import (
@@ -802,3 +804,199 @@ def test_texwordstyle_directive_emits_no_body_text(tmp_path):
     src = r"\begin{document}\texwordstyle{part}{部分标题}Hello.\end{document}"
     doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
     assert "texwordstyle" not in doc and "部分标题" not in doc
+
+
+# -- \texwordtemplate[keep]: content-injection mode -------------------------- #
+
+# A keep-mode template: a cover paragraph, the bookmarked anchor paragraph, and a
+# trailing back-matter paragraph. The converted body is spliced after the anchor.
+_KEEP_DOC = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{_W}" xmlns:r="{_R}"><w:body>
+  <w:p><w:r><w:t>COVER PAGE</w:t></w:r></w:p>
+  <w:p><w:bookmarkStart w:id="9" w:name="tex2word_section"/>
+       <w:bookmarkEnd w:id="9"/><w:r><w:t>ANCHOR</w:t></w:r></w:p>
+  <w:p><w:r><w:t>BACK MATTER</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+</w:body></w:document>""".encode()
+
+_CT_NS = _PR.replace("relationships", "content-types")
+_KEEP_CT = f"""<?xml version="1.0"?><Types xmlns="{_CT_NS}">
+  <Default Extension="rels"
+    ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml"
+    ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>""".encode()
+
+_KEEP_DOC_RELS = (
+    f'<?xml version="1.0"?><Relationships xmlns="{_PR}">'
+    f'<Relationship Id="rId1" Type="{_R}/styles" Target="styles.xml"/>'
+    "</Relationships>"
+).encode()
+
+_KEEP_ROOT_RELS = (
+    f'<?xml version="1.0"?><Relationships xmlns="{_PR}">'
+    f'<Relationship Id="rIdDoc" Type="{_R}/officeDocument" Target="word/document.xml"/>'
+    "</Relationships>"
+).encode()
+
+
+def _keep_docx(document: bytes = _KEEP_DOC, extra: dict | None = None) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", _KEEP_CT)
+        z.writestr("_rels/.rels", _KEEP_ROOT_RELS)
+        z.writestr("word/document.xml", document)
+        z.writestr("word/styles.xml", _REF_STYLES)
+        z.writestr("word/_rels/document.xml.rels", _KEEP_DOC_RELS)
+        for name, data in (extra or {}).items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def _keep_convert(tmp_path, body: str, *, template: bytes | None = None):
+    ref = tmp_path / "tmpl.docx"
+    ref.write_bytes(template if template is not None else _keep_docx())
+    src = (
+        r"\texwordtemplate[keep]{tmpl.docx}"
+        r"\begin{document}" + body + r"\end{document}"
+    )
+    return convert_source(src, base_dir=str(tmp_path))
+
+
+def test_keep_mode_splices_body_between_template_content(tmp_path):
+    result = _keep_convert(tmp_path, r"\section{Intro}Hello body.")
+    doc = _part(result.docx, "word/document.xml").decode()
+    # the template's own content is preserved ...
+    assert "COVER PAGE" in doc and "BACK MATTER" in doc
+    # ... and our converted body is spliced in between (after the anchor).
+    assert "Intro" in doc
+    assert doc.index("COVER PAGE") < doc.index("Intro") < doc.index("BACK MATTER")
+
+
+def test_keep_mode_output_is_structurally_valid(tmp_path):
+    from tex2word.validate import validate_docx
+
+    result = _keep_convert(tmp_path, r"\section{Intro}Body with $E=mc^2$.")
+    assert validate_docx(result.docx) == []
+
+
+def test_keep_mode_roundtrips(tmp_path):
+    from tex2word.roundtrip import to_latex
+
+    result = _keep_convert(tmp_path, r"\section{Intro}Recoverable body.")
+    latex = to_latex(result.docx, reconcile=False)
+    assert latex is not None and "Intro" in latex
+
+
+def test_keep_mode_embeds_manifest_and_merges_styles(tmp_path):
+    result = _keep_convert(tmp_path, r"\section{Intro}Body.")
+    names = zipfile.ZipFile(io.BytesIO(result.docx)).namelist()
+    assert "word/tex2word/manifest.json" in names
+    # our custom styles are merged into the template's styles.xml
+    styles = _part(result.docx, "word/styles.xml").decode()
+    assert 'w:styleId="SourceCode"' in styles
+
+
+def test_keep_mode_without_bookmark_falls_back_and_warns(tmp_path):
+    no_bm = f"""<?xml version="1.0"?>
+    <w:document xmlns:w="{_W}"><w:body>
+      <w:p><w:r><w:t>COVER PAGE</w:t></w:r></w:p>
+      <w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>
+    </w:body></w:document>""".encode()
+    result = _keep_convert(tmp_path, r"\section{Intro}Body.", template=_keep_docx(no_bm))
+    doc = _part(result.docx, "word/document.xml").decode()
+    assert "Intro" in doc  # converted on the styling-only fallback path
+    assert "COVER PAGE" not in doc  # template content not preserved on fallback
+    assert any("texwordtemplate[keep]" in w.message for w in result.report.warnings)
+
+
+def test_keep_mode_offsets_our_footnotes_past_the_templates(tmp_path):
+    fn = (
+        f'<?xml version="1.0"?><w:footnotes xmlns:w="{_W}">'
+        '<w:footnote w:type="separator" w:id="-1"><w:p/></w:footnote>'
+        '<w:footnote w:type="continuationSeparator" w:id="0"><w:p/></w:footnote>'
+        '<w:footnote w:id="1"><w:p><w:r><w:t>TEMPLATE NOTE</w:t></w:r></w:p></w:footnote>'
+        "</w:footnotes>"
+    ).encode()
+    rels = (
+        f'<?xml version="1.0"?><Relationships xmlns="{_PR}">'
+        f'<Relationship Id="rId1" Type="{_R}/styles" Target="styles.xml"/>'
+        f'<Relationship Id="rIdFn" Type="{_R}/footnotes" Target="footnotes.xml"/>'
+        "</Relationships>"
+    ).encode()
+    ct = _KEEP_CT.replace(
+        b"</Types>",
+        b'<Override PartName="/word/footnotes.xml" ContentType="application/'
+        b'vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>',
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", _KEEP_ROOT_RELS)
+        z.writestr("word/document.xml", _KEEP_DOC)
+        z.writestr("word/styles.xml", _REF_STYLES)
+        z.writestr("word/footnotes.xml", fn)
+        z.writestr("word/_rels/document.xml.rels", rels)
+    result = _keep_convert(
+        tmp_path, r"\section{Intro}Body.\footnote{OUR NOTE}", template=buf.getvalue()
+    )
+    notes = _part(result.docx, "word/footnotes.xml").decode()
+    assert "TEMPLATE NOTE" in notes and "OUR NOTE" in notes  # both kept
+    root = etree.fromstring(_part(result.docx, "word/footnotes.xml"))
+    ids = sorted(
+        int(n.get(f"{{{_W}}}id")) for n in root if n.get(f"{{{_W}}}type") is None
+    )
+    assert ids == [1, 2]  # template note id 1, ours shifted to 2 (no collision)
+    body = etree.fromstring(_part(result.docx, "word/document.xml"))
+    refs = [r.get(f"{{{_W}}}id") for r in body.iter(f"{{{_W}}}footnoteReference")]
+    assert refs == ["2"]  # our body reference follows the offset
+
+
+def test_keep_mode_relocates_our_images_clear_of_template_media(tmp_path):
+    # template already ships word/media/image1.png + a rIdImg1 relationship; our
+    # converted image (also image1.png / rIdImg1) must not clobber either.
+    rels = (
+        f'<?xml version="1.0"?><Relationships xmlns="{_PR}">'
+        f'<Relationship Id="rId1" Type="{_R}/styles" Target="styles.xml"/>'
+        f'<Relationship Id="rIdImg1" Type="{_R}/image" Target="media/image1.png"/>'
+        "</Relationships>"
+    ).encode()
+    ct = _KEEP_CT.replace(
+        b'<Default Extension="xml" ContentType="application/xml"/>',
+        b'<Default Extension="xml" ContentType="application/xml"/>'
+        b'<Default Extension="png" ContentType="image/png"/>',
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", _KEEP_ROOT_RELS)
+        z.writestr("word/document.xml", _KEEP_DOC)
+        z.writestr("word/styles.xml", _REF_STYLES)
+        z.writestr("word/media/image1.png", _PNG)
+        z.writestr("word/_rels/document.xml.rels", rels)
+    (tmp_path / "pic.png").write_bytes(_PNG)
+    result = _keep_convert(
+        tmp_path, r"\includegraphics{pic.png}", template=buf.getvalue()
+    )
+    names = zipfile.ZipFile(io.BytesIO(result.docx)).namelist()
+    assert "word/media/image1.png" in names  # template image untouched
+    assert "word/media/t2w/image1.png" in names  # ours relocated
+    doc = _part(result.docx, "word/document.xml").decode()
+    assert 'r:embed="rIdT2W1"' in doc  # our colliding rel id was renamed
+
+
+def test_keep_mode_default_is_styling_only(tmp_path):
+    # \texwordtemplate WITHOUT [keep] keeps the historical styling-only behaviour.
+    ref = tmp_path / "tmpl.docx"
+    ref.write_bytes(_keep_docx())
+    src = (
+        r"\texwordtemplate{tmpl.docx}"
+        r"\begin{document}\section{Intro}Body.\end{document}"
+    )
+    doc = _part(
+        convert_source(src, base_dir=str(tmp_path)).docx, "word/document.xml"
+    ).decode()
+    assert "Intro" in doc and "COVER PAGE" not in doc
