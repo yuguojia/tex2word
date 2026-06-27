@@ -1711,10 +1711,12 @@ def _trim_around_display_math(inlines: list[ir.Inline]) -> list[ir.Inline]:
     for i, node in enumerate(inlines):
         if not isinstance(node, ir.DisplayMath):
             continue
-        if i > 0 and isinstance(inlines[i - 1], ir.Text):
-            inlines[i - 1].value = inlines[i - 1].value.rstrip()
-        if i + 1 < len(inlines) and isinstance(inlines[i + 1], ir.Text):
-            inlines[i + 1].value = inlines[i + 1].value.lstrip()
+        prev = inlines[i - 1] if i > 0 else None
+        if isinstance(prev, ir.Text):
+            prev.value = prev.value.rstrip()
+        nxt = inlines[i + 1] if i + 1 < len(inlines) else None
+        if isinstance(nxt, ir.Text):
+            nxt.value = nxt.value.lstrip()
     return [n for n in inlines if not (isinstance(n, ir.Text) and n.value == "")]
 
 
@@ -1823,7 +1825,7 @@ _COL_PROCESSOR_ALIGN = {
 }
 
 #: Float-level alignment declarations (\centering etc.) inside a table/figure.
-_FLOAT_ALIGN_MACROS = {
+_FLOAT_ALIGN_MACROS: dict[str, ir.TableAlign] = {
     "centering": "center", "raggedright": "left", "raggedleft": "right",
 }
 

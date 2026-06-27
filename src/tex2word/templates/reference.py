@@ -215,8 +215,9 @@ def _normalize_builtin_ids(root: etree._Element) -> None:
             style.set(_w("styleId"), rename[sid])
     ref_tags = {_w("basedOn"), _w("next"), _w("link")}
     for el in root.iter():
-        if el.tag in ref_tags and el.get(_w("val")) in rename:
-            el.set(_w("val"), rename[el.get(_w("val"))])
+        val = el.get(_w("val"))
+        if val is not None and el.tag in ref_tags and val in rename:
+            el.set(_w("val"), rename[val])
 
 
 def merge_styles(reference_styles: bytes, our_styles: bytes) -> bytes:
@@ -289,7 +290,8 @@ def merge_settings(reference_settings: bytes) -> bytes:
     update.set(_w("val"), "true")
     insert_at = len(root)
     for i, child in enumerate(root):
-        if isinstance(child.tag, str) and etree.QName(child).localname in _SETTINGS_AFTER_UPDATEFIELDS:
+        if (isinstance(child.tag, str)
+                and etree.QName(child).localname in _SETTINGS_AFTER_UPDATEFIELDS):
             insert_at = i
             break
     root.insert(insert_at, update)

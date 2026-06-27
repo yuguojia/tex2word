@@ -89,6 +89,8 @@ select = ["E", "F", "I", "UP", "B"]
 # These modules embed long XML/HTML string literals (templates / reports).
 "src/tex2word/backend/package.py" = ["E501"]
 "src/tex2word/report.py" = ["E501"]
+# This test embeds long Word XML fixtures (reference-template parts).
+"tests/test_reference_doc.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

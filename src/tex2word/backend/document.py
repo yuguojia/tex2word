@@ -270,8 +270,10 @@ class DocumentWriter:
         # named paragraph style (whose linked multilevel list numId 4/5 point at).
         if block.part and self.part_style_id:
             style = self.part_style_id
-        elif block.appendix and 1 <= block.level <= 4 and self.appendix_style_ids[block.level - 1]:
-            style = self.appendix_style_ids[block.level - 1]
+        elif block.appendix and 1 <= block.level <= 4:
+            appendix_sid = self.appendix_style_ids[block.level - 1]
+            if appendix_sid:
+                style = appendix_sid
         p = self._styled_paragraph(style)
         if block.part and block.numbered:
             ppr = p.find(_qn("w:pPr"))

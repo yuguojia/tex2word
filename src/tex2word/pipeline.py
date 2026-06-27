@@ -329,7 +329,7 @@ class _RoleStyles:
                 for kind in _CAPTION_ROLE_KIND.values()}
 
 
-def _assign_role(styles: "_RoleStyles", role: str, sid: str) -> None:
+def _assign_role(styles: _RoleStyles, role: str, sid: str) -> None:
     """Record a resolved styleId for *role* on the right field of *styles*."""
     if role == "part":
         styles.part = sid
@@ -351,7 +351,7 @@ def _assign_role(styles: "_RoleStyles", role: str, sid: str) -> None:
         styles.style_remap[_PARAGRAPH_STYLE_ROLES[role][0]] = sid
 
 
-def _resolve_role_styles(meta, reference, report: ConversionReport) -> "_RoleStyles":
+def _resolve_role_styles(meta, reference, report: ConversionReport) -> _RoleStyles:
     """Resolve ``\\texwordstyle`` role->style bindings to reference-template styleIds.
 
     An explicit ``\\texwordstyle{role}{name}`` binds by style *name*. When a
