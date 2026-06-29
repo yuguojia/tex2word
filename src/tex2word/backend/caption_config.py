@@ -56,6 +56,19 @@ _SEQ_KEYS = {
     "algorithmseq": "Algorithm",
 }
 
+#: \texwordcaption keys that set a Word character style for the displayed
+#: caption identifier ("Figure 1-1: "). The empty value is the global default.
+_LABEL_STYLE_KEYS = {
+    "labelstyle": "",
+    "identifierstyle": "",
+    "figurelabelstyle": "Figure",
+    "figureidentifierstyle": "Figure",
+    "tablelabelstyle": "Table",
+    "tableidentifierstyle": "Table",
+    "algorithmlabelstyle": "Algorithm",
+    "algorithmidentifierstyle": "Algorithm",
+}
+
 
 @dataclass(frozen=True)
 class CaptionConfig:
@@ -77,6 +90,9 @@ class CaptionConfig:
     #: per-kind SEQ counter identifier override ("Figure" -> "图"); a kind absent
     #: here keeps its canonical English identifier (the default for every kind).
     seq_names: dict[str, str] = field(default_factory=dict)
+    #: Word character style names for the displayed caption identifier. The ""
+    #: entry is the global default, per-kind entries override it.
+    label_styles: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def english(cls) -> CaptionConfig:
@@ -136,6 +152,7 @@ class CaptionConfig:
             return self
         labels = dict(self.labels)
         seq_names = dict(self.seq_names)
+        label_styles = dict(self.label_styles)
         label_number_sep = self.label_number_sep
         section_sep = self.section_sep
         delim = self.delim
@@ -145,6 +162,8 @@ class CaptionConfig:
                 labels[_LABEL_KEYS[key]] = value
             elif key in _SEQ_KEYS:
                 seq_names[_SEQ_KEYS[key]] = value
+            elif key in _LABEL_STYLE_KEYS:
+                label_styles[_LABEL_STYLE_KEYS[key]] = value.strip()
             elif key == "labelsep":
                 label_number_sep = value
             elif key == "sectionsep":
@@ -156,7 +175,7 @@ class CaptionConfig:
             elif key == "eqclose":
                 eq_close = value
         return replace(
-            self, labels=labels, seq_names=seq_names,
+            self, labels=labels, seq_names=seq_names, label_styles=label_styles,
             label_number_sep=label_number_sep,
             section_sep=section_sep, delim=delim, eq_wrap=(eq_open, eq_close),
         )
@@ -164,6 +183,10 @@ class CaptionConfig:
     def label(self, counter: str) -> str:
         """Displayed label word for a SEQ ``counter`` (falls back to the name)."""
         return self.labels.get(counter, counter)
+
+    def label_style(self, kind: str) -> str | None:
+        """Word character style name for the displayed caption identifier."""
+        return self.label_styles.get(kind) or self.label_styles.get("") or None
 
     def seq_name(self, kind: str) -> str:
         """The SEQ counter identifier to emit for a caption *kind*.

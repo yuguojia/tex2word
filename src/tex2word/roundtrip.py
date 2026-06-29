@@ -133,7 +133,7 @@ def _prose_text(inlines: list) -> str:
     for n in inlines:
         if isinstance(n, ir.Text):
             out.append(n.value)
-        elif isinstance(n, ir.Emphasis | ir.Link | ir.Colored | ir.FontSize):
+        elif isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Colored | ir.FontSize):
             out.append(_prose_text(n.inlines))
     return "".join(out)
 
@@ -200,6 +200,8 @@ def _block_signature(block: ir.Block) -> tuple[str, str]:
         # content key would mismatch every unedited figure and drag its neighbour
         # paragraphs into a kept-manifest region. Align figures by position.
         return ("figure", "")
+    if isinstance(block, ir.PageBreak):
+        return ("pagebreak", block.command)
     return (type(block).__name__, "")
 
 
@@ -436,7 +438,7 @@ def _contains(inlines: list, types: tuple) -> bool:
     for n in inlines:
         if isinstance(n, types):
             return True
-        if isinstance(n, ir.Emphasis | ir.Link | ir.Colored | ir.FontSize) \
+        if isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Colored | ir.FontSize) \
                 and _contains(n.inlines, types):
             return True
     return False
@@ -470,7 +472,7 @@ def _has_unreliable_inline(inlines: list) -> bool:
     for n in inlines:
         if isinstance(n, _UNRELIABLE):
             return True
-        if isinstance(n, ir.Emphasis | ir.Link | ir.Colored | ir.FontSize) \
+        if isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Colored | ir.FontSize) \
                 and _has_unreliable_inline(n.inlines):
             return True
     return False
@@ -515,4 +517,3 @@ def _graft_comments(original: ir.Block, current: ir.Block) -> ir.Block:
     if not notes:
         return original  # comment-free (or already present) -> identity preserved
     return replace(original, inlines=[*original.inlines, *notes])
-

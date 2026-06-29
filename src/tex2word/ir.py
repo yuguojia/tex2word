@@ -71,6 +71,14 @@ class Emphasis(Node):
 
 
 @dataclass
+class CharStyle(Node):
+    """Inline content carrying a named Word character style."""
+
+    inlines: list[Inline]
+    style: str
+
+
+@dataclass
 class Math(Node):
     """Inline math. Carries the raw (macro-expanded) LaTeX source."""
 
@@ -214,7 +222,7 @@ class Image(Node):
 
 
 Inline = (
-    Text | Emphasis | Math | DisplayMath | Ref | Cite | Link | LineBreak
+    Text | Emphasis | CharStyle | Math | DisplayMath | Ref | Cite | Link | LineBreak
     | Footnote | Endnote | Colored | FontSize | Image | RawInline | Comment
     | IndexEntry
 )
@@ -366,6 +374,13 @@ class Theorem(Node):
 
 
 @dataclass
+class PageBreak(Node):
+    """A hard page break from ``\\newpage`` / ``\\clearpage``."""
+
+    command: Literal["newpage", "clearpage", "pagebreak"] = "newpage"
+
+
+@dataclass
 class TableOfContents(Node):
     """``\\tableofcontents``/``\\listoffigures``/``\\listoftables`` → Word TOC field.
 
@@ -392,6 +407,7 @@ class CSLItem(Node):
 class Bibliography(Node):
     entries: list[CSLItem]
     style: str = "numeric"
+    title: list[Inline] | None = None
 
 
 @dataclass
@@ -410,6 +426,7 @@ Block = (
     | CodeBlock
     | Quote
     | Theorem
+    | PageBreak
     | Algorithm
     | Bibliography
     | TableOfContents

@@ -102,6 +102,15 @@ def test_config_overrides_keep_other_fields():
     assert cfg.delim == "　"
 
 
+def test_config_label_style_overrides():
+    cfg = CaptionConfig.english().with_overrides({
+        "labelstyle": "Caption Lead",
+        "tablelabelstyle": "Table Lead",
+    })
+    assert cfg.label_style("Figure") == "Caption Lead"
+    assert cfg.label_style("Table") == "Table Lead"
+
+
 def test_seq_name_default_is_canonical():
     cfg = CaptionConfig.chinese()  # zh labels, but SEQ identifiers stay English
     assert cfg.seq_name("Figure") == "Figure"

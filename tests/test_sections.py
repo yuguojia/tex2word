@@ -5,6 +5,8 @@ from conftest import NS, document_root
 from tex2word import convert_source, ir
 from tex2word.backend.numbering import HEADING_NUM_ID
 from tex2word.frontend import parse_document
+from tex2word.roundtrip import to_latex
+from tex2word.validate import validate_docx
 
 
 def _headings(src: str) -> list[ir.Heading]:
@@ -64,3 +66,31 @@ def test_numbering_part_defines_heading_scheme():
     xml = numbering_xml().decode()
     assert 'w:numId="3"' in xml
     assert "%1.%2.%3" in xml  # three-level decimal scheme
+
+
+def test_page_break_macros_become_blocks():
+    doc, _ = parse_document(
+        r"\begin{document}Before\newpage After\clearpage More\pagebreak[4] Done\end{document}"
+    )
+    assert [type(b) for b in doc.blocks] == [
+        ir.Paragraph, ir.PageBreak, ir.Paragraph, ir.PageBreak, ir.Paragraph,
+        ir.PageBreak, ir.Paragraph,
+    ]
+    assert [b.command for b in doc.blocks if isinstance(b, ir.PageBreak)] == [
+        "newpage", "clearpage", "pagebreak",
+    ]
+
+
+def test_backend_emits_hard_page_breaks():
+    src = r"\begin{document}Before\newpage After\clearpage More\pagebreak[4] Done\end{document}"
+    docx = convert_source(src).docx
+    root = document_root(docx)
+    assert root.xpath("count(//w:br[@w:type='page'])", namespaces=NS) == 3
+    assert validate_docx(docx) == []
+
+
+def test_page_breaks_round_trip_from_manifest():
+    src = r"\begin{document}Before\newpage After\clearpage Done\end{document}"
+    latex = to_latex(convert_source(src).docx, reconcile=False)
+    assert latex is not None
+    assert r"\newpage" in latex and r"\clearpage" in latex

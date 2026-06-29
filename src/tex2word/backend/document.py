@@ -67,8 +67,10 @@ class DocumentWriter:
         table_text_style_id: str | None = None,
         threeline_table_style_id: str | None = None,
         body_style_id: str | None = None,
+        star_heading_style_ids: list[str | None] | None = None,
         style_remap: dict[str, str] | None = None,
         par_style_names: dict[str, str] | None = None,
+        char_style_names: dict[str, str] | None = None,
         caption_config: CaptionConfig | None = None,
         cjk_quote_hint: bool = False,
         num_ids: NumIds | None = None,
@@ -96,6 +98,9 @@ class DocumentWriter:
         #: the default paragraph style at body level (else the built-in Normal), so
         #: 正文 can be e.g. an indented "normal-indent" style instead of plain Normal.
         self._body_style = body_style_id or "Normal"
+        #: \texwordstyle{section*}/{heading1*}/... overrides for starred headings
+        #: only. Numbered headings keep Heading1..5 for navigation and numbering.
+        self.star_heading_style_ids = (star_heading_style_ids or []) + [None] * 5
         #: {canonical styleId -> effective styleId} for \texwordstyle paragraph-style
         #: roles (abstract/sourcecode/title/...): explicit binding or auto-discovery.
         self._style_remap = style_remap or {}
@@ -103,6 +108,10 @@ class DocumentWriter:
         #: the per-paragraph style override; plus a dedupe set for "not found" warnings.
         self._par_style_names = par_style_names or {}
         self._warned_par_styles: set[str] = set()
+        #: {lower-cased style name -> character styleId} for
+        #: \texwordcharstyle{name}{text}; includes linked paragraph/character styles.
+        self._char_style_names = char_style_names or {}
+        self._warned_char_styles: set[str] = set()
         #: document preamble (for compiling TikZ pictures to images)
         self.preamble = preamble
         self.number_by_section = number_by_section
@@ -248,6 +257,8 @@ class DocumentWriter:
                 self._block(inner, body, default_style="Quote")
         elif isinstance(block, ir.Theorem):
             self._theorem(block, body)
+        elif isinstance(block, ir.PageBreak):
+            self._page_break(body)
         elif isinstance(block, ir.Algorithm):
             self._algorithm(block, body)
         elif isinstance(block, ir.Bibliography):
@@ -274,6 +285,10 @@ class DocumentWriter:
             appendix_sid = self.appendix_style_ids[block.level - 1]
             if appendix_sid:
                 style = appendix_sid
+        if not block.numbered and not block.part and 1 <= block.level <= 5:
+            star_sid = self.star_heading_style_ids[block.level - 1]
+            if star_sid:
+                style = star_sid
         p = self._styled_paragraph(style)
         if block.part and block.numbered:
             ppr = p.find(_qn("w:pPr"))
@@ -295,6 +310,13 @@ class DocumentWriter:
         self._inlines(block.inlines, p)
         if start is not None:
             p.append(fields.bookmark_end_for(start))
+        body.append(p)
+
+    def _page_break(self, body: _Element) -> None:
+        p = self._styled_paragraph("Normal")
+        r = el("w:r")
+        sub(r, "w:br", **{"w:type": "page"})
+        p.append(r)
         body.append(p)
 
     def _math_block(self, block: ir.MathBlock, body: _Element) -> None:
@@ -911,6 +933,10 @@ class DocumentWriter:
         """
         return self._caption_style_ids.get(kind) or "Caption"
 
+    def _caption_label_char_style(self, kind: str) -> str | None:
+        """Resolved character style for the displayed caption identifier."""
+        return self._char_style(self.caption_cfg.label_style(kind))
+
     def _caption(
         self,
         counter: str,
@@ -925,7 +951,13 @@ class DocumentWriter:
             self._inlines(caption, p)
             return p
         cfg = self.caption_cfg
-        p.append(self._run(f"{cfg.label(counter)}{cfg.label_number_sep}"))
+        label_style = self._caption_label_char_style(counter)
+        p.append(
+            self._run(
+                f"{cfg.label(counter)}{cfg.label_number_sep}",
+                char_style=label_style,
+            )
+        )
         name = bookmark or (_bookmark_for(label) if label else None)
         start = None
         if name:
@@ -934,10 +966,11 @@ class DocumentWriter:
         for run in fields.number_field(
             cfg.seq_name(counter), self.number_by_section, cfg.section_sep
         ):
+            _set_run_char_style(run, label_style)
             p.append(run)
         if start is not None:
             p.append(fields.bookmark_end_for(start))
-        p.append(self._run(cfg.delim))
+        p.append(self._run(cfg.delim, char_style=label_style))
         self._inlines(caption, p)
         return p
 
@@ -953,7 +986,7 @@ class DocumentWriter:
         sub(sdtpr, "w:tag", **{"w:val": BIB_SDT_TAG})
         content = sub(sdt, "w:sdtContent")
         heading = self._styled_paragraph("Heading1")
-        heading.append(self._run("References"))
+        self._inlines(block.title or [ir.Text("References")], heading)
         content.append(heading)
         zotero = self.citation_mode == "zotero"
         for i, item in enumerate(block.entries, start=1):
@@ -1011,7 +1044,18 @@ class DocumentWriter:
                 "w:val": "single", "w:sz": "6", "w:space": "2", "w:color": "auto",
             })
             cfg = self.caption_cfg
-            cap.append(self._run(f"{cfg.label('Algorithm')}{cfg.label_number_sep}", bold=True))
+            label_style = self._caption_label_char_style("Algorithm")
+            label_kw = (
+                {"char_style": label_style}
+                if label_style else
+                {"bold": True}
+            )
+            cap.append(
+                self._run(
+                    f"{cfg.label('Algorithm')}{cfg.label_number_sep}",
+                    **label_kw,  # type: ignore[arg-type]
+                )
+            )
             start = None
             if block.label:
                 start = fields.bookmark_start(_bookmark_for(block.label))
@@ -1019,10 +1063,11 @@ class DocumentWriter:
             for run in fields.number_field(
                 cfg.seq_name("Algorithm"), self.number_by_section, cfg.section_sep
             ):
+                _set_run_char_style(run, label_style)
                 cap.append(run)
             if start is not None:
                 cap.append(fields.bookmark_end_for(start))
-            cap.append(self._run(cfg.delim, bold=True))
+            cap.append(self._run(cfg.delim, **label_kw))  # type: ignore[arg-type]
             if block.caption:
                 self._inlines(block.caption, cap)
             tc.append(cap)
@@ -1166,6 +1211,10 @@ class DocumentWriter:
             p.append(self._run(node.value, **kw))
         elif isinstance(node, ir.Emphasis):
             st2 = st.with_flag(_STYLE_FLAG[node.kind_])
+            for child in node.inlines:
+                self._emit(child, p, st2)
+        elif isinstance(node, ir.CharStyle):
+            st2 = _replace(st, char_style=self._char_style(node.style))
             for child in node.inlines:
                 self._emit(child, p, st2)
         elif isinstance(node, ir.Colored):
@@ -1379,16 +1428,18 @@ class DocumentWriter:
              subscript: bool = False, color: str | None = None,
              shade: str | None = None, strike: bool = False,
              highlight: bool = False, size: int | None = None,
-             eastasia_hint: bool = False) -> _Element:
+             eastasia_hint: bool = False, char_style: str | None = None) -> _Element:
         r = el("w:r")
         if any([bold, italic, underline, typewriter, smallcaps, hyperlink,
                 superscript, subscript, color, shade, strike, highlight, size,
-                eastasia_hint]):
+                eastasia_hint, char_style]):
             rpr = sub(r, "w:rPr")
             # children must follow the ECMA-376 CT_RPr sequence, else strict
             # validators reject the run: rStyle, rFonts, b, i, smallCaps, strike,
             # color, sz, szCs, highlight, u, shd, vertAlign.
-            if hyperlink:
+            if char_style:
+                sub(rpr, "w:rStyle", **{"w:val": char_style})
+            elif hyperlink:
                 sub(rpr, "w:rStyle", **{"w:val": "Hyperlink"})
             if typewriter:
                 sub(rpr, "w:rFonts", **{"w:ascii": "Consolas", "w:hAnsi": "Consolas"})
@@ -1440,6 +1491,23 @@ class DocumentWriter:
                     f"\\texwordparstyle: style {name!r} not found in the reference template",
                 )
             return default
+        return sid
+
+    def _char_style(self, name: str | None) -> str | None:
+        """Resolve a ``\\texwordcharstyle{name}{text}`` style to a character styleId."""
+        if not name:
+            return None
+        key = name.strip().lower()
+        sid = self._char_style_names.get(key)
+        if sid is None:
+            if key not in self._warned_char_styles:
+                self.report.warn(
+                    "texwordcharstyle",
+                    f"\\texwordcharstyle: character style {name!r} not found in the "
+                    "reference template",
+                )
+                self._warned_char_styles.add(key)
+            return None
         return sid
 
     def _styled_paragraph(self, style: str) -> _Element:
@@ -1510,6 +1578,7 @@ class _RunStyle:
     color: str | None = None
     shade: str | None = None
     size: int | None = None
+    char_style: str | None = None
 
     def kwargs(self) -> dict[str, Any]:
         return {k: v for k, v in vars(self).items() if v}
@@ -1563,6 +1632,20 @@ def _qn(tag: str) -> str:
     from .ooxml import qn
 
     return qn(tag)
+
+
+def _set_run_char_style(run: _Element, style: str | None) -> None:
+    """Apply a Word character style to a ``w:r`` run in-place."""
+    if not style or run.tag != _qn("w:r"):
+        return
+    rpr = run.find(_qn("w:rPr"))
+    if rpr is None:
+        rpr = el("w:rPr")
+        run.insert(0, rpr)
+    existing = rpr.find(_qn("w:rStyle"))
+    if existing is not None:
+        rpr.remove(existing)
+    rpr.insert(0, el("w:rStyle", **{"w:val": style}))
 
 
 def _style_math_runs(omath: _Element, color: str | None, size: int | None) -> None:

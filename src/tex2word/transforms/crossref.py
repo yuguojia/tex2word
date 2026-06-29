@@ -155,7 +155,7 @@ def _rewrite_refs_inlines(inlines: list[ir.Inline], labels, report) -> None:
                 else:
                     node.anchor = info.bookmark
             _rewrite_refs_inlines(node.inlines, labels, report)
-        elif isinstance(node, ir.Emphasis | ir.Footnote | ir.Colored | ir.FontSize):
+        elif isinstance(node, ir.Emphasis | ir.CharStyle | ir.Footnote | ir.Colored | ir.FontSize):
             _rewrite_refs_inlines(node.inlines, labels, report)
 
 

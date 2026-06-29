@@ -29,7 +29,7 @@ from ..report import ConversionReport
 from . import siunitx
 from .colors import ColorTable
 from .macros import expand_macros, local_package_sources
-from .preprocess import preprocess, replace_inline_tikz
+from .preprocess import preprocess, replace_inline_tikz, strip_comments
 
 # --------------------------------------------------------------------------- #
 # Static maps
@@ -234,6 +234,7 @@ _IGNORE_MACROS = {
     "texwordstyle",  # tex2word style-binding directive: scanned separately, no output
     "texwordtemplate",  # tex2word reference-template directive: scanned separately
     "texwordparstyle",  # tex2word per-paragraph style: handled at block level, else dropped
+    "defbibheading",  # biblatex bibliography heading definition: handled at block level
     # grouping / layout / counter declarations -> drop (args consumed by specs)
     "begingroup", "endgroup", "bgroup", "egroup",
     "AddToShipoutPicture", "ClearShipoutPicture",
@@ -381,13 +382,16 @@ def _latex_of(nodes: list) -> str:
 
 
 class _Builder:
-    def __init__(self, report: ConversionReport) -> None:
+    def __init__(self, report: ConversionReport, latex_context=None) -> None:
         self.report = report
+        self.latex_context = latex_context
         self.meta = ir.DocumentMeta()
         self.bib_files: list[str] = []
         self.bib_style: str = "plain"
         self.bibstyle_set: bool = False  # an explicit \bibliographystyle was seen
         self.thebib_items: dict[str, ir.CSLItem] = {}
+        # biblatex \defbibheading{name}[default title]{heading template}
+        self.bib_headings: dict[str, tuple[str | None, str]] = {}
         self.colors = ColorTable()
         # glossaries/acronyms: label -> (short, long); track first use of \gls
         self.acronyms: dict[str, tuple[str, str]] = {}
@@ -424,7 +428,22 @@ class _Builder:
         than treating it as a standalone macro.
         """
         out: list[ir.Inline] = []
-        for i, node in enumerate(nodes):
+        i = 0
+        while i < len(nodes):
+            node = nodes[i]
+            if isinstance(node, LatexMacroNode) and node.macroname == "texwordcharstyle":
+                name = _chars_of(_group_nodes(node)).strip()
+                next_node = nodes[i + 1] if i + 1 < len(nodes) else None
+                if name and isinstance(next_node, LatexGroupNode):
+                    out.append(ir.CharStyle(self.inlines(next_node.nodelist), name))
+                    i += 2
+                    continue
+                rest = self._scoped_inlines(nodes[i + 1:])
+                if name:
+                    out.append(ir.CharStyle(rest, name))
+                else:
+                    out.extend(rest)
+                return out
             if isinstance(node, LatexMacroNode) and node.macroname in ("color", "normalcolor"):
                 rest = self._scoped_inlines(nodes[i + 1:])
                 fg = self._color_of(node) if node.macroname == "color" else None
@@ -446,6 +465,7 @@ class _Builder:
                 out.append(ir.Emphasis(rest, _EMPHASIS_DECL[node.macroname]))  # type: ignore[arg-type]
                 return out
             self._inline_node(node, out)
+            i += 1
         return out
 
     def _color_of(self, node: LatexMacroNode) -> str | None:
@@ -509,6 +529,8 @@ class _Builder:
         if name in _EMPHASIS:
             inner = self.inlines(_group_nodes(node))
             out.append(ir.Emphasis(inner, _EMPHASIS[name]))  # type: ignore[arg-type]
+            return
+        if name == "texwordcharstyle":
             return
         if name in ("textcolor", "colorbox", "fcolorbox"):
             self._inline_color(node, name, out)
@@ -820,6 +842,8 @@ class _Builder:
                     inline_buf[idx:] = [ir.Colored(seg, fg=val)]  # type: ignore[arg-type]
                 elif kind == "emph":
                     inline_buf[idx:] = [ir.Emphasis(seg, val)]  # type: ignore[arg-type]
+                elif kind == "charstyle" and val:
+                    inline_buf[idx:] = [ir.CharStyle(seg, val)]  # type: ignore[arg-type]
             scope_marks.clear()
             if any(not (isinstance(x, ir.Text) and not x.value.strip()) for x in inline_buf):
                 cleaned = _clean_inlines(inline_buf.copy(), trim=True)
@@ -831,7 +855,11 @@ class _Builder:
             # flushes an empty buffer and clears the pending style too).
             self._pending_par_style = None
 
-        for node in nodes:
+        skip_next = False
+        for idx, node in enumerate(nodes):
+            if skip_next:
+                skip_next = False
+                continue
             if isinstance(node, LatexCharsNode):
                 self._chars_into_blocks(node.chars, inline_buf, out, flush)
                 continue
@@ -875,6 +903,12 @@ class _Builder:
                 # \appendix (and class wrappers like fairmeta's \beginappendix)
                 # switch later sections to lettered numbering.
                 self.in_appendix = True
+                continue
+            if isinstance(node, LatexMacroNode) and node.macroname in (
+                "newpage", "clearpage", "pagebreak",
+            ):
+                flush()
+                out.append(ir.PageBreak(command=node.macroname))  # type: ignore[arg-type]
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname.rstrip("*") in _SECTION_LEVELS:
                 flush()
@@ -930,9 +964,18 @@ class _Builder:
                     if name.strip():
                         self.bib_files.append(name.strip())
                 continue
+            if isinstance(node, LatexMacroNode) and node.macroname == "defbibheading":
+                self._defbibheading(node)
+                continue
             if isinstance(node, LatexMacroNode) and node.macroname == "printbibliography":
                 flush()
-                out.append(ir.Bibliography(entries=[], style="numeric"))
+                out.append(
+                    ir.Bibliography(
+                        entries=[],
+                        style="numeric",
+                        title=self._printbibliography_title(node),
+                    )
+                )
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname == "printindex":
                 flush()
@@ -983,6 +1026,17 @@ class _Builder:
                 name = _chars_of(_group_nodes(node)).strip()
                 if name:
                     self._pending_par_style = name
+                continue
+            # \texwordcharstyle{name}{text}: apply a Word character style to the
+            # following group. Declaration form applies until the paragraph flush.
+            if isinstance(node, LatexMacroNode) and node.macroname == "texwordcharstyle":
+                name = _chars_of(_group_nodes(node)).strip()
+                next_node = nodes[idx + 1] if idx + 1 < len(nodes) else None
+                if name and isinstance(next_node, LatexGroupNode):
+                    inline_buf.append(ir.CharStyle(self.inlines(next_node.nodelist), name))
+                    skip_next = True
+                elif name:
+                    scope_marks.append((len(inline_buf), "charstyle", name))
                 continue
             # \noindent: dropped as before, unless \texwordstyle{noindent}{name} bound
             # it to a Word style -- then the paragraph it precedes adopts that style
@@ -1048,6 +1102,58 @@ class _Builder:
                 url = oid if oid.startswith("http") else f"https://orcid.org/{oid}"
                 self.meta.affiliations.append([ir.Link([ir.Text(f"ORCID: {oid}")], url)])
 
+    def _defbibheading(self, node: LatexMacroNode) -> None:
+        """Register a biblatex ``\\defbibheading`` definition.
+
+        We only need the visible heading text. The optional argument is treated as
+        the default value for ``#1``; ``\\printbibliography[title=...]`` overrides it.
+        """
+        groups = [
+            a for a in (node.nodeargd.argnlist if node.nodeargd else [])
+            if isinstance(a, LatexGroupNode) and a.delimiters == ("{", "}")
+        ]
+        if len(groups) < 2:
+            return
+        name = _chars_of(groups[0].nodelist).strip()
+        if not name:
+            return
+        default_title: str | None = None
+        for arg in node.nodeargd.argnlist if node.nodeargd else []:
+            if isinstance(arg, LatexGroupNode) and arg.delimiters == ("[", "]"):
+                default_title = _latex_of(arg.nodelist).strip()
+                break
+        self.bib_headings[name] = (default_title, _latex_of(groups[1].nodelist).strip())
+
+    def _printbibliography_title(self, node: LatexMacroNode) -> list[ir.Inline] | None:
+        opts = _parse_printbibliography_options(node)
+        heading = opts.get("heading", "bibliography").strip() or "bibliography"
+        title = opts.get("title")
+        if title is not None:
+            title = _strip_outer_braces(title.strip())
+
+        if heading in self.bib_headings:
+            default_title, template = self.bib_headings[heading]
+            arg = title if title is not None else default_title
+            rendered = template.replace("#1", arg or "")
+            return self._bib_heading_inlines(rendered)
+        if title is not None:
+            return self._bib_heading_inlines(title)
+        return None
+
+    def _bib_heading_inlines(self, latex: str) -> list[ir.Inline] | None:
+        if not latex.strip():
+            return None
+        try:
+            nodes, _, _ = LatexWalker(
+                latex, latex_context=self.latex_context, tolerant_parsing=True
+            ).get_latex_nodes()
+        except Exception:
+            return [ir.Text(_normalize_ws(latex))]
+        for n in nodes:
+            if isinstance(n, LatexMacroNode) and n.macroname.rstrip("*") in _SECTION_LEVELS:
+                return _clean_inlines(self.inlines(_group_nodes(n)), trim=True)
+        return _clean_inlines(self.inlines(nodes), trim=True)
+
     def _heading(self, node: LatexMacroNode, out: list[ir.Block]) -> None:
         name = node.macroname.rstrip("*")
         levels = _SECTION_LEVELS_BOOK if self.book_mode else _SECTION_LEVELS
@@ -1062,7 +1168,7 @@ class _Builder:
             level,
             inner,
             numbered=numbered,
-            appendix=self.in_appendix and numbered and not is_part,
+            appendix=self.in_appendix and not is_part,
             part=is_part,
         )
         out.append(heading)
@@ -1559,7 +1665,7 @@ def _inlines_to_text(inlines: list[ir.Inline]) -> str:
     for node in inlines:
         if isinstance(node, ir.Text):
             out.append(node.value)
-        elif isinstance(node, ir.Emphasis | ir.Link | ir.Footnote | ir.Endnote):
+        elif isinstance(node, ir.Emphasis | ir.CharStyle | ir.Link | ir.Footnote | ir.Endnote):
             out.append(_inlines_to_text(node.inlines))
         elif isinstance(node, ir.Math):
             out.append(node.latex)
@@ -1941,6 +2047,27 @@ def _parse_graphics_options(opts: str) -> dict[str, str]:
     return out
 
 
+def _parse_printbibliography_options(node: LatexMacroNode) -> dict[str, str]:
+    opt = _optional_group(node)
+    if opt is None:
+        return {}
+    return _parse_graphics_options(_latex_of(opt))
+
+
+def _strip_outer_braces(value: str) -> str:
+    if not (value.startswith("{") and value.endswith("}")):
+        return value
+    depth = 0
+    for i, ch in enumerate(value):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and i != len(value) - 1:
+                return value
+    return value[1:-1]
+
+
 def _make_image(node: LatexMacroNode) -> ir.Image:
     path = _chars_of(_group_nodes(node))
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
@@ -2110,6 +2237,7 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("chapter", "*[{"),
             MacroSpec("part", "*[{"),
             MacroSpec("caption", "*[{"),
+            MacroSpec("pagebreak", "["),
             # layout / front-matter commands: consume their args so they don't
             # leak as text (e.g. full-page cover \AddToShipoutPicture{\put...}).
             MacroSpec("AddToShipoutPicture", "*{"),
@@ -2120,6 +2248,9 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("texwordtemplate", "[{"),
             # tex2word-only: set the current paragraph's Word style (consume 1 arg).
             MacroSpec("texwordparstyle", "{"),
+            # tex2word-only: set a Word character style (one style-name arg; an
+            # optional following group is consumed by the builder as content).
+            MacroSpec("texwordcharstyle", "{"),
             MacroSpec("newcounter", "{["),
             MacroSpec("addtocounter", "{{"),
             MacroSpec("refstepcounter", "{"),
@@ -2217,6 +2348,7 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("bibliography", "{"),
             MacroSpec("bibliographystyle", "{"),
             MacroSpec("addbibresource", "[{"),
+            MacroSpec("defbibheading", "{[{"),
             MacroSpec("printbibliography", "["),
             MacroSpec("setitemize", "{"),
             MacroSpec("setenumerate", "{"),
@@ -2493,6 +2625,7 @@ def parse_document(
     engine instead of the built-in heuristic.
     """
     report = ConversionReport()
+    directive_source = strip_comments(source)
     expanded = replace_inline_tikz(expand_macros(preprocess(source, base_dir), base_dir))
     body, preamble = _split_document(expanded)
     # \newtheorem declarations may live in a \usepackage'd local .sty (e.g. a
@@ -2504,7 +2637,7 @@ def parse_document(
     walker = LatexWalker(body, latex_context=ctx, tolerant_parsing=True)
     nodes, _, _ = walker.get_latex_nodes()
 
-    builder = _Builder(report)
+    builder = _Builder(report, ctx)
     builder.theorem_envs.update(custom_theorems)
     builder.unnumbered_theorems = unnumbered_theorems
     builder.theorem_counters = _resolve_theorem_counters(custom_theorems, shared_counters)
@@ -2513,9 +2646,10 @@ def parse_document(
     _collect_color_defs(expanded, builder.colors)  # \definecolor/\colorlet (preamble + body)
     _collect_acronyms(expanded, builder.acronyms)   # \newacronym (preamble + body)
     _collect_glossary_entries(expanded, builder.glossary)  # \newglossaryentry terms
+    _collect_bib_headings(preamble, builder, ctx)  # biblatex \defbibheading (preamble)
     # \texwordstyle{noindent}{name}: pre-scanned so \noindent paragraphs can adopt
     # the bound style while blocks are built (style_overrides are detected later).
-    builder.noindent_style = _detect_noindent_style(source)
+    builder.noindent_style = _detect_noindent_style(directive_source)
     blocks = builder.blocks(nodes)
     doc = ir.Document(blocks=blocks, meta=builder.meta, book=builder.book_mode)
 
@@ -2526,11 +2660,13 @@ def parse_document(
         doc.meta.language = _detect_language(preamble)  # babel/polyglossia -> BCP-47
     _detect_fonts(doc, preamble)  # fontspec/xeCJK \setmainfont / \setCJK*font
     doc.meta.columns = _detect_columns(expanded)  # twocolumn / \twocolumn / multicols
-    # scan the raw source: a user's \providecommand{\texwordstyle}[2]{} (added so
-    # pdflatex ignores it) would otherwise expand the directive away before we see it.
-    _detect_style_overrides(doc, source)  # \texwordstyle{role}{Word style name}
-    _detect_caption_overrides(doc, source)  # \texwordcaption{key}{value}
-    _detect_template(doc, source)  # \texwordtemplate{path.docx}
+    # Scan the source before macro expansion: a user's
+    # \providecommand{\texwordstyle}[2]{} (added so pdflatex ignores it) would
+    # otherwise expand the directive away before we see it. Strip comments first
+    # so disabled tex2word directives do not still take effect.
+    _detect_style_overrides(doc, directive_source)  # \texwordstyle{role}{Word style name}
+    _detect_caption_overrides(doc, directive_source)  # \texwordcaption{key}{value}
+    _detect_template(doc, directive_source)  # \texwordtemplate{path.docx}
     _resolve_bibliography(doc, builder, base_dir, report, csl_path)
     return doc, report
 
@@ -2585,6 +2721,11 @@ _STYLE_OVERRIDE_ROLES = {
     # generic paragraph styles: bind, else auto-discover by name, else built-in
     "title", "subtitle", "abstract", "sourcecode", "quote", "bibliography",
     "footnote",
+    # unnumbered sectioning commands (\section*, \chapter*, ...): let them use
+    # a template paragraph style instead of the built-in Heading 1-5 style.
+    "heading1*", "heading2*", "heading3*", "heading4*", "heading5*",
+    "chapter*", "section*", "subsection*", "subsubsection*", "paragraph*",
+    "subparagraph*",
     "body",           # paragraph style for ordinary body-text (正文) paragraphs
     "table",          # paragraph style for text inside table cells (default Normal)
     "threelinetable", # Word *table* style applied to a 三线表 (first cmd is \toprule)
@@ -2597,6 +2738,10 @@ _STYLE_OVERRIDE_RE = re.compile(
 _CAPTION_OVERRIDE_KEYS = {
     "figurelabel", "tablelabel", "equationlabel", "algorithmlabel",
     "figureseq", "tableseq", "equationseq", "algorithmseq",
+    "labelstyle", "identifierstyle",
+    "figurelabelstyle", "tablelabelstyle", "algorithmlabelstyle",
+    "figureidentifierstyle", "tableidentifierstyle",
+    "algorithmidentifierstyle",
     "labelsep", "sectionsep", "delim", "eqopen", "eqclose",
 }
 _CAPTION_OVERRIDE_RE = re.compile(
@@ -2621,7 +2766,10 @@ def _detect_style_overrides(doc: ir.Document, source: str) -> None:
     ``figurecaption`` / ``tablecaption`` / ``subfigurecaption`` /
     ``algorithmcaption``; the generic paragraph roles (``title``, ``subtitle``,
     ``abstract``, ``sourcecode``, ``quote``, ``bibliography``, ``footnote``) restyle
-    those paragraphs. ``body`` sets the paragraph style of ordinary body-text (正文)
+    those paragraphs. Starred heading roles (``section*`` / ``subsection*`` /
+    ``chapter*`` or the level-based ``heading1*``..``heading5*``) restyle only
+    unnumbered sectioning commands, leaving numbered headings on the built-in
+    navigation styles. ``body`` sets the paragraph style of ordinary body-text (正文)
     paragraphs (default ``Normal``), so 正文 can be an indented ``normal-indent``-style
     rather than plain ``Normal``. ``table`` sets the paragraph style of the text inside every
     table cell (default ``Normal``); ``threelinetable`` names a Word *table* style
@@ -2657,7 +2805,9 @@ def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
     """Pick up ``\\texwordcaption{key}{value}`` caption/cross-ref wording overrides.
 
     Keys: ``figurelabel``/``tablelabel``/``equationlabel``/``algorithmlabel`` set
-    the displayed label word; ``labelsep`` the gap between label and number;
+    the displayed label word; ``labelstyle``/``identifierstyle`` and their
+    per-kind forms (e.g. ``figurelabelstyle``) name a Word character style for
+    the displayed caption identifier; ``labelsep`` the gap between label and number;
     ``sectionsep`` the chapter/number separator (e.g. ``-`` for "1-1");
     ``delim`` the text before the caption; ``eqopen``/``eqclose`` the equation
     parentheses. The value is kept verbatim (spaces are significant), so e.g.
@@ -2753,6 +2903,21 @@ def _collect_bib_resources(preamble: str, builder: _Builder) -> None:
         for name in m.group(1).split(","):
             if name.strip() and name.strip() not in builder.bib_files:
                 builder.bib_files.append(name.strip())
+
+
+def _collect_bib_headings(preamble: str, builder: _Builder, ctx) -> None:
+    """Pick up biblatex ``\\defbibheading`` definitions declared in the preamble."""
+    if r"\defbibheading" not in preamble:
+        return
+    try:
+        nodes, _, _ = LatexWalker(
+            preamble, latex_context=ctx, tolerant_parsing=True
+        ).get_latex_nodes()
+    except Exception:
+        return
+    for node in nodes:
+        if isinstance(node, LatexMacroNode) and node.macroname == "defbibheading":
+            builder._defbibheading(node)
 
 
 def _fill_meta_from_preamble(

@@ -73,6 +73,55 @@ def test_biblatex_default_is_numeric(tmp_path):
     assert "[1]" in _text(res.docx)
 
 
+def test_defbibheading_default_bibliography_heading(tmp_path):
+    _, res = _convert(
+        tmp_path,
+        body=r"Text \cite{e1905}.\printbibliography",
+        preamble=(
+            r"\usepackage{biblatex}\addbibresource{refs.bib}"
+            r"\defbibheading{bibliography}{Works Cited}"
+        ),
+    )
+    txt = _text(res.docx)
+    assert "Works Cited" in txt
+    assert "References" not in txt
+
+
+def test_printbibliography_heading_and_title_option(tmp_path):
+    _, res = _convert(
+        tmp_path,
+        body=r"Text \cite{e1905}.\printbibliography[heading=mybib,title={Selected Works}]",
+        preamble=(
+            r"\usepackage{biblatex}\addbibresource{refs.bib}"
+            r"\defbibheading{mybib}[Default Title]{Custom: #1}"
+        ),
+    )
+    txt = _text(res.docx)
+    assert "Custom: Selected Works" in txt
+    assert "Default Title" not in txt
+
+
+def test_printbibliography_heading_uses_defbibheading_default_title(tmp_path):
+    _, res = _convert(
+        tmp_path,
+        body=r"Text \cite{e1905}.\printbibliography[heading=mybib]",
+        preamble=(
+            r"\usepackage{biblatex}\addbibresource{refs.bib}"
+            r"\defbibheading{mybib}[Default Title]{Custom: #1}"
+        ),
+    )
+    assert "Custom: Default Title" in _text(res.docx)
+
+
+def test_printbibliography_title_without_defbibheading(tmp_path):
+    _, res = _convert(
+        tmp_path,
+        body=r"Text \cite{e1905}.\printbibliography[title={Works Cited}]",
+        preamble=r"\usepackage{biblatex}\addbibresource{refs.bib}",
+    )
+    assert "Works Cited" in _text(res.docx)
+
+
 def test_natbib_numbers_option_forces_numeric(tmp_path):
     _, res = _convert(
         tmp_path,

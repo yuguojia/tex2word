@@ -42,6 +42,17 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Hard page breaks.** `\newpage`, `\clearpage` and `\pagebreak` now become
+  Word hard page breaks (`w:br w:type="page"`), so the current page ends even
+  when it is not full. The break is represented in the IR and manifest, so
+  `to-latex` can round-trip it.
+- **Custom Word styles for starred headings.** Starred sectioning commands can
+  now opt out of the built-in Heading 1–5 styles while leaving numbered headings
+  unchanged: bind by command name (`\texwordstyle{section*}{...}`,
+  `\texwordstyle{subsection*}{...}`, `\texwordstyle{chapter*}{...}`) or by
+  level (`\texwordstyle{heading1*}{...}` .. `heading5*`). Command names follow
+  the document class level mapping, so `section*` is level 1 in `article` and
+  level 2 in `book`/`report`.
 - **Keep the Word template's content (`\texwordtemplate[keep]{...}`).** A new
   optional argument on the in-source template directive switches from the default
   *styling-only* adoption (a fresh document built onto the template's styles, theme
@@ -77,6 +88,12 @@ those documents surfaced.
   shows); an unknown name warns and the paragraph keeps the default style. Under
   pdfLaTeX add `\providecommand{\texwordparstyle}[1]{}` so the directive is a
   no-op there.
+- **Inline Word character styles from the source.** `\texwordcharstyle{Style Name}{text}`
+  applies a reference-doc character style to the wrapped text, by the style's
+  Word display name. Linked paragraph/character styles are accepted by naming
+  the linked paragraph style, and declaration form
+  `{\texwordcharstyle{Style Name}text}` scopes to the current group/paragraph.
+  Unknown styles warn and leave the text unstyled.
 - **`\noindent` can adopt a Word style.** `\texwordstyle{noindent}{Style Name}` binds
   `\noindent` to a reference-doc style, so every paragraph introduced by `\noindent`
   takes that style (the global counterpart of the per-paragraph `\texwordparstyle`).
@@ -236,6 +253,8 @@ those documents surfaced.
   | `algorithmlabel` | algorithm label word | `算法` | `算法1-1` |
   | `figureseq` / `tableseq` | figure/table SEQ counter *identifier* | `图` / `表` | `SEQ 图` field name |
   | `equationseq` / `algorithmseq` | equation/algorithm SEQ identifier | `公式` / `算法` | `SEQ 公式` field name |
+  | `labelstyle` / `identifierstyle` | character style for the displayed caption identifier | `Caption Label` | styles `Figure 1-1:` only |
+  | `figurelabelstyle` / `tablelabelstyle` / `algorithmlabelstyle` | per-kind caption identifier character style | `图题编号` | overrides `labelstyle` for that kind |
   | `labelsep` | gap between label and number | `` (empty) | `图1` vs `Figure 1` |
   | `sectionsep` | chapter/number separator | `.` | `图1.1` instead of `图1-1` |
   | `delim` | text before the caption | `：` | `图1-1：说明` |
@@ -247,6 +266,9 @@ those documents surfaced.
   \texwordcaption{delim}{：}
   % full-width parentheses for equation numbers:
   \texwordcaption{eqopen}{（}\texwordcaption{eqclose}{）}
+  % style the caption identifier ("Figure 1-1:") using a character style
+  % or a linked paragraph/character style from the reference document:
+  \texwordcaption{labelstyle}{Caption Label}
   ```
 
   The `…seq` keys are different from the label words: they rename the underlying
@@ -314,6 +336,13 @@ those documents surfaced.
   | `tablecaption` | table captions (overrides `caption`) | explicit only |
   | `subfigurecaption` | sub-figure `(a)`/`(b)` captions (overrides `caption`) | explicit only |
   | `algorithmcaption` | algorithm captions (overrides `caption`) | explicit only |
+  | `heading1*`..`heading5*` | unnumbered heading levels 1–5, regardless of source command | explicit only |
+  | `chapter*` | unnumbered `\chapter*` headings (level 1) | explicit only |
+  | `section*` | unnumbered `\section*` headings (level 1 in `article`, level 2 in `book`/`report`) | explicit only |
+  | `subsection*` | unnumbered `\subsection*` headings (level 2 in `article`, level 3 in `book`/`report`) | explicit only |
+  | `subsubsection*` | unnumbered `\subsubsection*` headings (level 3 in `article`, level 4 in `book`/`report`) | explicit only |
+  | `paragraph*` | unnumbered `\paragraph*` headings (level 4 in `article`, level 5 in `book`/`report`) | explicit only |
+  | `subparagraph*` | unnumbered `\subparagraph*` headings (level 4 in `article`, level 5 in `book`/`report`) | explicit only |
   | `title` | document title | explicit or name auto-discovery |
   | `subtitle` | author / affiliation / date lines | explicit or name auto-discovery |
   | `abstract` | abstract + keywords paragraphs | explicit or name auto-discovery |
@@ -322,6 +351,7 @@ those documents surfaced.
   | `bibliography` | reference-list entries | explicit or name auto-discovery |
   | `footnote` | footnote / endnote text | explicit or name auto-discovery |
   | `body` | ordinary body-text (正文) paragraphs (default `Normal`) | explicit only |
+  | `noindent` | paragraphs introduced by `\noindent`, scoped one paragraph at a time | explicit only |
   | `table` | text inside table cells (default `Normal`) | explicit only |
   | `threelinetable` | Word *table* style for a 三线表 (tabular whose first command is `\toprule`) | explicit only |
 

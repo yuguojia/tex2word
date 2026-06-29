@@ -35,6 +35,11 @@ _REF_STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <w:style w:type="paragraph" w:styleId="abs"><w:name w:val="Abstract"/></w:style>
   <w:style w:type="paragraph" w:styleId="code"><w:name w:val="Source Code"/></w:style>
   <w:style w:type="paragraph" w:styleId="ni"><w:name w:val="正文缩进"/></w:style>
+  <w:style w:type="character" w:styleId="kw"><w:name w:val="关键词"/></w:style>
+  <w:style w:type="paragraph" w:styleId="topic"><w:name w:val="术语"/>
+    <w:link w:val="topicChar"/></w:style>
+  <w:style w:type="character" w:styleId="topicChar"><w:name w:val="术语 字符"/>
+    <w:link w:val="topic"/></w:style>
 </w:styles>""".encode()
 
 _R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -611,6 +616,65 @@ def test_appendix_and_part_paragraphs_use_template_styles(tmp_path):
     assert 'w:pStyle w:val="Heading1"' in doc  # the ordinary section is unchanged
 
 
+def test_starred_appendix_heading_uses_bound_style_without_numbering(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{appendix1}{附录1}"
+        r"\begin{document}\appendix\section*{Extra}\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="ap1"' in doc
+    assert "<w:numPr>" not in doc
+
+
+def test_starred_section_can_use_custom_style_without_changing_numbered(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{section*}{部分标题}"
+        r"\begin{document}\section{Numbered}\section*{Starred}\end{document}"
+    )
+    root = etree.fromstring(_part(convert_source(src, reference_doc=str(ref)).docx,
+                                  "word/document.xml"))
+    paras = root.findall(f".//{{{_W}}}p")
+    styled = []
+    for p in paras:
+        sid = p.find(f"{{{_W}}}pPr/{{{_W}}}pStyle")
+        if sid is None:
+            continue
+        numpr = p.find(f"{{{_W}}}pPr/{{{_W}}}numPr")
+        text = "".join(t.text or "" for t in p.iter(f"{{{_W}}}t"))
+        styled.append((text, sid.get(f"{{{_W}}}val"), numpr is not None))
+    assert ("Numbered", "Heading1", True) in styled
+    assert ("Starred", "pt", False) in styled
+
+
+def test_starred_heading_level_role_applies_to_subsection(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordstyle{heading2*}{部分标题}"
+        r"\begin{document}\subsection*{Unnumbered}\subsection{Numbered}\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="pt"' in doc
+    assert 'w:pStyle w:val="Heading2"' in doc
+
+
+def test_book_starred_section_role_uses_book_level(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\documentclass{book}"
+        r"\texwordstyle{section*}{部分标题}"
+        r"\begin{document}\section*{Book Section}\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:pStyle w:val="pt"' in doc
+    assert 'w:pStyle w:val="Heading2"' not in doc
+
+
 def test_unbound_appendix_falls_back_to_builtin(tmp_path):
     # no \texwordstyle -> appendix/part keep the bundled numbering + Heading styles
     ref = tmp_path / "template.docx"
@@ -649,6 +713,19 @@ def test_caption_style_defaults_when_unbound(tmp_path):
     assert 'w:pStyle w:val="Caption"' in doc and 'w:pStyle w:val="cap"' not in doc
 
 
+def test_commented_texwordstyle_does_not_warn(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"""
+\texwordstyle{tablecaption}{表注}
+%\texwordstyle{threelinetable}{三线表}
+\texwordstyle{Abstract}{Abstract}
+\begin{document}Plain text.\end{document}
+"""
+    result = convert_source(src, reference_doc=str(ref))
+    assert not any("三线表" in w.message for w in result.report.warnings)
+
+
 def test_per_type_caption_overrides_default(tmp_path):
     # {caption} sets the default for all; {tablecaption} overrides only tables.
     ref = tmp_path / "template.docx"
@@ -665,6 +742,68 @@ def test_per_type_caption_overrides_default(tmp_path):
     assert 'w:pStyle w:val="cap"' in doc   # figure caption -> the 图注 default
     assert 'w:pStyle w:val="tcap"' in doc  # table caption -> the 表注 override
     assert 'w:pStyle w:val="Caption"' not in doc  # nothing left on the default
+
+
+def test_texwordcaption_labelstyle_styles_caption_identifier(tmp_path):
+    # \texwordcaption{labelstyle}{name} styles the displayed "Figure N:" lead
+    # without styling the caption body text.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordcaption{labelstyle}{关键词}"
+        r"\begin{document}\begin{figure}\caption{Hi}\end{figure}\end{document}"
+    )
+    root = etree.fromstring(_part(convert_source(src, reference_doc=str(ref)).docx,
+                                  "word/document.xml"))
+    cap = next(
+        p for p in root.findall(f".//{{{_W}}}p")
+        if "Hi" in "".join(t.text or "" for t in p.iter(f"{{{_W}}}t"))
+    )
+
+    def run_style(run):
+        rstyle = run.find(f"{{{_W}}}rPr/{{{_W}}}rStyle")
+        return rstyle.get(f"{{{_W}}}val") if rstyle is not None else None
+
+    runs = cap.findall(f"{{{_W}}}r")
+    styled_text = [
+        ("".join(t.text or "" for t in r.iter(f"{{{_W}}}t")), run_style(r))
+        for r in runs
+    ]
+    assert ("Figure ", "kw") in styled_text
+    assert ("1", "kw") in styled_text
+    assert (": ", "kw") in styled_text
+    assert ("Hi", None) in styled_text
+
+
+def test_texwordcaption_labelstyle_accepts_linked_style_and_per_kind_override(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordcaption{labelstyle}{关键词}"
+        r"\texwordcaption{tablelabelstyle}{术语}"
+        r"\begin{document}"
+        r"\begin{figure}\caption{F}\end{figure}"
+        r"\begin{table}\begin{tabular}{c}x\end{tabular}\caption{T}\end{table}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:rStyle w:val="kw"' in doc
+    assert 'w:rStyle w:val="topicChar"' in doc
+    assert 'w:rStyle w:val="topic"' not in doc
+
+
+def test_texwordcaption_algorithm_labelstyle(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\texwordcaption{algorithmlabelstyle}{关键词}"
+        r"\begin{document}"
+        r"\begin{algorithm}\caption{Algo}\begin{algorithmic}\State x\end{algorithmic}\end{algorithm}"
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:rStyle w:val="kw"' in doc
+    assert ">Algo<" in doc
 
 
 def test_generic_paragraph_style_autodiscovered_by_name(tmp_path):
@@ -751,6 +890,65 @@ def test_texwordparstyle_unknown_style_warns_and_falls_back(tmp_path):
     doc = _part(result.docx, "word/document.xml").decode()
     assert 'w:pStyle w:val="Normal"' in doc
     assert any("texwordparstyle" in w.message for w in result.report.warnings)
+
+
+def test_texwordcharstyle_sets_character_style(tmp_path):
+    # \texwordcharstyle{name}{text} applies a reference-doc character style to
+    # just that inline span, naming the style by its Word display name.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"Before \texwordcharstyle{关键词}{styled text} after."
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:rStyle w:val="kw"' in doc
+    assert "texwordcharstyle" not in doc and "关键词" not in doc
+    assert ">styled text<" in doc
+
+
+def test_texwordcharstyle_accepts_linked_paragraph_style_name(tmp_path):
+    # Naming a linked paragraph/character style by the paragraph style's display
+    # name resolves to its linked character style id.
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"Before \texwordcharstyle{术语}{linked text} after."
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert 'w:rStyle w:val="topicChar"' in doc
+    assert 'w:pStyle w:val="topic"' not in doc
+
+
+def test_texwordcharstyle_declaration_scopes_to_group(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"Before {\texwordcharstyle{关键词}declared text} after."
+        r"\end{document}"
+    )
+    doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
+    assert doc.count('w:rStyle w:val="kw"') == 1
+    assert ">declared text<" in doc
+
+
+def test_texwordcharstyle_unknown_style_warns_and_falls_back(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\begin{document}"
+        r"\texwordcharstyle{NoSuchStyle}{Body text.}"
+        r"\end{document}"
+    )
+    result = convert_source(src, reference_doc=str(ref))
+    doc = _part(result.docx, "word/document.xml").decode()
+    assert 'w:rStyle w:val="NoSuchStyle"' not in doc
+    assert ">Body text.<" in doc
+    assert any("texwordcharstyle" in w.message for w in result.report.warnings)
 
 
 def test_noindent_adopts_bound_style(tmp_path):
