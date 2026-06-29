@@ -214,7 +214,10 @@ The GUI depends on this package for the actual conversion, so everything in
   and converted **back to LaTeX** (`tex2word to-latex out.docx`); the corpus
   `latex→docx→latex` keeps the same block structure. Reconcile (on by default)
   merges Word edits against the manifest, and **Word Track Changes are accepted**
-  on read (insertions kept, deletions dropped).
+  on read (insertions kept, deletions dropped). Use
+  `tex2word to-latex --ignore-manifest out.docx` to force the foreign-docx reader
+  even when a tex2word manifest is embedded; review comments are preserved even
+  when their anchor sits inside a deleted revision.
 - **Reports & validation**: `--report report.json|report.html` writes a coverage
   report; `tex2word.validate.validate_docx` structurally validates output;
   `tex2word benchmark <dir>` reports a quantitative baseline (math-OMML %,

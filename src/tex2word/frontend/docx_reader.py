@@ -565,7 +565,8 @@ class _Reader:
             tag = _local(el)
             if tag in ("bookmarkStart", "bookmarkEnd", "proofErr"):
                 continue
-            if tag in ("del", "moveFrom"):  # accepted deletion -> drop
+            if tag in ("del", "moveFrom"):  # accepted deletion -> drop text, keep review notes
+                self._deleted_comments(el, out)
                 continue
             if tag in ("ins", "moveTo"):  # accepted insertion -> keep its runs
                 field = self._runs(el, out, field)
@@ -616,6 +617,25 @@ class _Reader:
         if text:
             out.append(self._styled_text(r, text))
         return field
+
+    def _deleted_comments(self, parent: etree._Element, out: list[ir.Inline]) -> None:
+        """Recover comment anchors inside accepted deletions without restoring
+        the deleted text itself.
+
+        Word can place the run that carries ``w:commentReference`` inside
+        ``w:del``/``w:moveFrom`` when a reviewer comments on text that is later
+        deleted. We still accept the deletion, but the review note is user input
+        and should survive the read-back.
+        """
+        seen: set[str] = set()
+        for cref in parent.iter(_w("commentReference")):
+            cid = cref.get(_w("id")) or ""
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            entry = self.comments.get(cid)
+            if entry is not None:
+                out.append(ir.Comment(text=entry[1], author=entry[0]))
 
     def _styled_text(self, r: etree._Element, text: str) -> ir.Inline:
         rpr = r.find(_w("rPr"))

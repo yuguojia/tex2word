@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
+
 from tex2word import convert_source, ir
 from tex2word.backend.latex_writer import latex_escape, write_latex
 from tex2word.cli import main
@@ -101,3 +104,23 @@ def test_to_latex_cli(tmp_path):
     assert main(["to-latex", str(docx), "-o", str(out)]) == 0
     recovered = out.read_text(encoding="utf-8")
     assert "\\section{Hi}" in recovered and "$x^2$" in recovered
+
+
+def test_to_latex_cli_ignore_manifest(tmp_path):
+    docx_bytes = convert_source(r"\begin{document}Original body.\end{document}").docx
+    zin = zipfile.ZipFile(io.BytesIO(docx_bytes))
+    parts = {name: zin.read(name) for name in zin.namelist()}
+    parts["word/document.xml"] = (
+        parts["word/document.xml"].decode().replace("Original body.", "Edited in Word.").encode()
+    )
+    docx = tmp_path / "edited.docx"
+    with zipfile.ZipFile(docx, "w") as zout:
+        for name, data in parts.items():
+            zout.writestr(name, data)
+
+    out = tmp_path / "direct.tex"
+    assert main(["to-latex", str(docx), "--ignore-manifest", "-o", str(out)]) == 0
+
+    recovered = out.read_text(encoding="utf-8")
+    assert "Edited in Word." in recovered
+    assert "Original body." not in recovered

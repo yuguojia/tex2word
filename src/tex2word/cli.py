@@ -97,12 +97,18 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser(
         "to-latex", help="recover LaTeX from a tex2word-produced .docx (round-trip)"
     )
-    rev.add_argument("input", help="input .docx (must carry the round-trip manifest)")
+    rev.add_argument("input", help="input .docx")
     rev.add_argument("-o", "--output", default=None, help="output .tex path (default: stdout)")
-    rev.add_argument(
+    reconcile_mode = rev.add_mutually_exclusive_group()
+    reconcile_mode.add_argument(
         "--no-reconcile",
         action="store_true",
         help="emit the embedded manifest verbatim, ignoring any Word edits to the body",
+    )
+    reconcile_mode.add_argument(
+        "--ignore-manifest",
+        action="store_true",
+        help="ignore any embedded manifest and recover LaTeX directly from the Word body",
     )
     rev.add_argument(
         "--reconcile-report",
@@ -145,7 +151,9 @@ def _cmd_to_latex(args: argparse.Namespace) -> int:
     kept: list[KeptManifestBlock] = []
     latex = to_latex(
         data, reconcile=reconcile,
-        kept=kept if reconcile else None, annotate=reconcile and not args.no_annotate,
+        kept=kept if reconcile and not args.ignore_manifest else None,
+        annotate=reconcile and not args.no_annotate and not args.ignore_manifest,
+        ignore_manifest=args.ignore_manifest,
     )
     if latex is None:
         print("error: no round-trip manifest in this .docx", file=sys.stderr)
