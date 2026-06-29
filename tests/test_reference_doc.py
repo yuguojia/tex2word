@@ -571,6 +571,92 @@ def test_carried_heading_style_keeps_its_template_numbering(tmp_path):
     assert _num_for(nbr, "3") == "9"  # which still resolves (carried verbatim)
 
 
+_STYLE_NUMBERING_STYLES = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{_W}">
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="h1"><w:name w:val="a1"/>
+    <w:pPr><w:outlineLvl w:val="0"/><w:numPr><w:numId w:val="77"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="lb"><w:name w:val="List Bullet"/>
+    <w:pPr><w:numPr><w:numId w:val="78"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="ln"><w:name w:val="List Number"/>
+    <w:pPr><w:numPr><w:numId w:val="79"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="appendix1"><w:name w:val="appendix1"/>
+    <w:pPr><w:numPr><w:numId w:val="80"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="part"><w:name w:val="part"/>
+    <w:pPr><w:numPr><w:numId w:val="81"/></w:numPr></w:pPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="mybullet"><w:name w:val="My Bullet"/>
+    <w:pPr><w:numPr><w:numId w:val="82"/></w:numPr></w:pPr>
+  </w:style>
+</w:styles>""".encode()
+
+_STYLE_NUMBERING = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="{_W}">
+  <w:abstractNum w:abstractNumId="77">
+    <w:lvl w:ilvl="0"><w:pStyle w:val="h1"/><w:lvlText w:val="第%1章"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="77"><w:abstractNumId w:val="77"/></w:num>
+  <w:num w:numId="78"><w:abstractNumId w:val="78"/></w:num>
+  <w:num w:numId="79"><w:abstractNumId w:val="79"/></w:num>
+  <w:num w:numId="80"><w:abstractNumId w:val="80"/></w:num>
+  <w:num w:numId="81"><w:abstractNumId w:val="81"/></w:num>
+  <w:num w:numId="82"><w:abstractNumId w:val="82"/></w:num>
+</w:numbering>""".encode()
+
+
+def _style_numbering_template(tmp_path) -> str:
+    ref = tmp_path / "style-numbering.docx"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/styles.xml", _STYLE_NUMBERING_STYLES)
+        z.writestr("word/document.xml", _REF_DOC)
+        z.writestr("word/numbering.xml", _STYLE_NUMBERING)
+    ref.write_bytes(buf.getvalue())
+    return str(ref)
+
+
+def test_texwordtemplate_style_numbering_uses_styles_only(tmp_path):
+    _style_numbering_template(tmp_path)
+    src = (
+        r"\texwordtemplate[style-numbering]{style-numbering.docx}"
+        r"\begin{document}"
+        r"\part{P}"
+        r"\section{S}"
+        r"\begin{itemize}\item Bullet\end{itemize}"
+        r"\begin{enumerate}\item Number\end{enumerate}"
+        r"\appendix\section{A}"
+        r"\end{document}"
+    )
+    docx = convert_source(src, base_dir=str(tmp_path)).docx
+    assert _part(docx, "word/numbering.xml") == _STYLE_NUMBERING
+    doc = _part(docx, "word/document.xml").decode()
+    assert "<w:numPr>" not in doc
+
+    root = etree.fromstring(_part(docx, "word/document.xml"))
+    styles = root.xpath("//w:pPr/w:pStyle/@w:val", namespaces={"w": _W})
+    assert "Heading1" in styles          # detected from outlineLvl, not name/styleId
+    assert "ListBullet" in styles        # template styleId lb -> built-in ListBullet
+    assert "ListNumber" in styles        # template styleId ln -> built-in ListNumber
+    assert "appendix1" in styles
+    assert "part" in styles
+
+
+def test_style_numbering_list_style_can_be_overridden(tmp_path):
+    _style_numbering_template(tmp_path)
+    src = (
+        r"\texwordtemplate[style-numbering]{style-numbering.docx}"
+        r"\texwordstyle{itemize}{My Bullet}"
+        r"\begin{document}\begin{itemize}\item Bullet\end{itemize}\end{document}"
+    )
+    docx = convert_source(src, base_dir=str(tmp_path)).docx
+    root = etree.fromstring(_part(docx, "word/document.xml"))
+    assert "mybullet" in root.xpath("//w:pPr/w:pStyle/@w:val", namespaces={"w": _W})
+
+
 def test_extract_reference_reads_numbering():
     ref = extract_reference(_reference_docx())
     assert ref.raw_numbering is not None

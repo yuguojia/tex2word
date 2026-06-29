@@ -149,11 +149,30 @@ _BUILTIN_NAME_TO_ID = {
     "heading 5": "Heading5",
     "caption": "Caption",
     "quote": "Quote",
+    "list bullet": "ListBullet",
+    "list number": "ListNumber",
     "hyperlink": "Hyperlink",
     "footnote text": "FootnoteText",
     "footnote reference": "FootnoteReference",
     "bibliography": "Bibliography",
 }
+
+
+def _builtin_target_for_style(style: etree._Element) -> str | None:
+    name_el = style.find(_w("name"))
+    name = name_el.get(_w("val")) if name_el is not None else None
+    if name:
+        target = _BUILTIN_NAME_TO_ID.get(name.strip().lower())
+        if target:
+            return target
+    if (style.get(_w("type")) or "paragraph") == "paragraph":
+        outline = style.find(f"{_w('pPr')}/{_w('outlineLvl')}")
+        raw = outline.get(_w("val")) if outline is not None else None
+        if raw and raw.isdigit():
+            level = int(raw)
+            if 0 <= level <= 4:
+                return f"Heading{level + 1}"
+    return None
 
 
 def _compute_builtin_rename(root: etree._Element) -> dict[str, str]:
@@ -168,11 +187,9 @@ def _compute_builtin_rename(root: etree._Element) -> dict[str, str]:
     rename: dict[str, str] = {}
     for style in styles:
         old = style.get(_w("styleId"))
-        name_el = style.find(_w("name"))
-        name = name_el.get(_w("val")) if name_el is not None else None
-        if not old or not name:
+        if not old:
             continue
-        target = _BUILTIN_NAME_TO_ID.get(name.strip().lower())
+        target = _builtin_target_for_style(style)
         if not target or target == old:
             continue
         if target in existing or target in rename.values():
