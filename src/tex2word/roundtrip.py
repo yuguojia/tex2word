@@ -70,18 +70,21 @@ def to_latex(
     docx_bytes: bytes, reconcile: bool = True,
     kept: list[KeptManifestBlock] | None = None,
     annotate: bool = False,
+    ignore_manifest: bool = False,
 ) -> str | None:
     """Convert a ``.docx`` back to LaTeX.
 
     Prefers the embedded tex2word manifest (exact IR, original math/figure
-    source). With ``reconcile=True`` (the default) the manifest IR is merged with
-    the freshly-read document IR by a **manifest-biased anchored merge**
-    (:func:`reconcile_blocks`): an unedited document reconciles to *identity*
-    (byte-for-byte the original LaTeX), while prose edited in Word is picked up;
-    a lossless manifest block is never replaced by its lossy read-back. Pass
-    ``reconcile=False`` to emit the manifest verbatim and ignore the body. For a
-    *foreign* ``.docx`` (no manifest) it always reads ``document.xml``
-    structurally. Returns ``None`` only if the document can't be read at all.
+    source). Pass ``ignore_manifest=True`` to force the foreign-docx reader even
+    when a manifest is embedded. Otherwise, with ``reconcile=True`` (the default)
+    the manifest IR is merged with the freshly-read document IR by a
+    **manifest-biased anchored merge** (:func:`reconcile_blocks`): an unedited
+    document reconciles to *identity* (byte-for-byte the original LaTeX), while
+    prose edited in Word is picked up; a lossless manifest block is never
+    replaced by its lossy read-back. Pass ``reconcile=False`` to emit the
+    manifest verbatim and ignore the body. For a *foreign* ``.docx`` (no
+    manifest) it always reads ``document.xml`` structurally. Returns ``None``
+    only if the document can't be read at all.
 
     Pass a list as ``kept`` to collect the manifest blocks reconcile retained
     verbatim inside an edited region (stale-risk content to proof-read); pass
@@ -92,6 +95,11 @@ def to_latex(
     from .backend.latex_writer import write_latex
     from .frontend.docx_reader import read_docx
 
+    if ignore_manifest:
+        try:
+            return write_latex(read_docx(docx_bytes))
+        except Exception:
+            return None
     manifest_doc = recover_ir(docx_bytes)
     if manifest_doc is None:
         try:

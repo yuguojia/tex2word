@@ -49,6 +49,18 @@ def test_default_is_manifest_faithful():
     assert "The first paragraph is unchanged." in plain
 
 
+def test_ignore_manifest_reads_current_word_body():
+    docx = convert_source(r"\begin{document}Original body.\end{document}").docx
+    edited = _edit_docx(docx, "Original body.", "Edited in Word.")
+
+    manifest_only = to_latex(edited, reconcile=False)
+    direct = to_latex(edited, ignore_manifest=True)
+
+    assert manifest_only is not None and "Original body." in manifest_only
+    assert direct is not None and "Edited in Word." in direct
+    assert "Original body." not in direct
+
+
 def test_reconcile_blocks_equal_prefers_original():
     a = ir.Paragraph([ir.Text("same")])
     orig = [ir.Heading(1, [ir.Text("H")]), a]

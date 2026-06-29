@@ -53,6 +53,26 @@ def test_comment_renders_as_latex_percent_line():
     assert "The claim holds." in latex
 
 
+def test_comment_inside_deleted_revision_survives_but_deleted_text_does_not():
+    doc = (
+        f'<?xml version="1.0"?><w:document xmlns:w="{_W}"><w:body><w:p>'
+        '<w:r><w:t>Keep.</w:t></w:r>'
+        '<w:del><w:r><w:delText>Deleted text.</w:delText></w:r>'
+        '<w:r><w:commentReference w:id="3"/></w:r></w:del>'
+        "</w:p></w:body></w:document>"
+    ).encode()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", doc)
+        z.writestr("word/comments.xml", _comments_xml("3", "Alice", "Do not lose this"))
+
+    latex = write_latex(read_docx(buf.getvalue()))
+
+    assert "Keep." in latex
+    assert "Deleted text." not in latex
+    assert "% comment: [Alice] Do not lose this" in latex
+
+
 def test_comment_does_not_comment_out_following_text():
     doc = ir.Document(blocks=[ir.Paragraph([
         ir.Text("before "), ir.Comment("a note", "Bob"), ir.Text("after"),

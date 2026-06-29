@@ -170,6 +170,16 @@ those documents surfaced.
     blocks it kept inside an edited region (stale-risk content to proof-read), and
     `--reconcile-report PATH` writes them as JSON. The Python `to_latex(..., kept=
     [])` collects the same `KeptManifestBlock` records.
+  - **New: force direct Word-body recovery.** `tex2word to-latex --ignore-manifest`
+    ignores an embedded tex2word manifest and reads the current `word/document.xml`
+    body as a foreign `.docx`, useful for auditing the Word-side reader or
+    recovering heavily edited review documents without manifest-biased reconcile.
+    The Python API exposes the same path as `to_latex(..., ignore_manifest=True)`.
+  - **Review comments survive accepted deletions.** The Word reader still accepts
+    Track Changes by dropping deleted text, but now preserves any
+    `w:commentReference` anchors nested inside `w:del` / `w:moveFrom`, so reviewer
+    notes on deleted passages round-trip as `% comment:` lines instead of being
+    lost with the deleted run.
 - **`\texwordstyle{body}{…}` restyles ordinary body text (正文).** A new role sets
   the paragraph style of plain body-text paragraphs, previously hardcoded to
   `Normal`: `\texwordstyle{body}{正文缩进}` makes 正文 use an indented
