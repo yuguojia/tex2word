@@ -469,6 +469,9 @@ class DocumentMeta(Node):
     # the converted body at its ``tex2word_section`` bookmark, instead of lifting
     # only the template's styling onto a fresh document.
     template_keep_content: bool = False
+    # \texwordtemplate[style-numbering]{path.docx}: trust paragraph styles in the
+    # template to carry numbering, so generated body blocks do not stamp numPr.
+    template_style_numbering: bool = False
 
 
 @dataclass

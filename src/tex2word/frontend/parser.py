@@ -2715,6 +2715,7 @@ def _detect_fonts(doc: ir.Document, preamble: str) -> None:
 #: logical roles a \texwordstyle directive may bind to a Word style.
 _STYLE_OVERRIDE_ROLES = {
     "appendix1", "appendix2", "appendix3", "appendix4", "part",
+    "itemize", "enumerate", "listbullet", "listnumber",
     "figure",   # the paragraph that holds an inserted image
     "caption",  # default for every caption when no per-type role is set
     "figurecaption", "tablecaption", "subfigurecaption", "algorithmcaption",
@@ -2748,12 +2749,17 @@ _CAPTION_OVERRIDE_RE = re.compile(
     r"\\texwordcaption\s*\{([^}]*)\}\s*\{([^}]*)\}"
 )
 #: \texwordtemplate[mode]{path.docx}: in-source Word reference template path,
-#: with an optional [mode] (``keep`` selects content-injection mode).
+#: with optional comma/space-separated modes (``keep`` selects content-injection
+#: mode; ``style-numbering`` trusts template paragraph styles for numbering).
 _TEMPLATE_RE = re.compile(
     r"\\texwordtemplate\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}"
 )
 #: optional-argument keywords that select "keep the template's content" mode.
 _TEMPLATE_KEEP_KEYWORDS = {"keep", "keepcontent", "content", "preserve"}
+_TEMPLATE_STYLE_NUMBERING_KEYWORDS = {
+    "stylenumbering", "style-numbering", "style_numbering",
+    "stylesnumbering", "styles-numbering", "style", "styles",
+}
 
 
 def _detect_style_overrides(doc: ir.Document, source: str) -> None:
@@ -2830,15 +2836,20 @@ def _detect_template(doc: ir.Document, source: str) -> None:
 
     The optional ``[mode]`` argument selects how the template is used: ``keep``
     (also ``preserve`` / ``content``) keeps the template's own content and
-    splices the converted body at its ``tex2word_section`` bookmark, instead of
-    lifting only the template's styling onto a fresh document.
+    splices the converted body at its ``tex2word_section`` bookmark; ``style-
+    numbering`` copies the template numbering unchanged and lets paragraph
+    styles (Heading/List Bullet/List Number/appendix/part) carry numbering.
     """
     for m in _TEMPLATE_RE.finditer(source):
         path = m.group(2).strip()
         if path:
             doc.meta.template_doc = path
             mode = (m.group(1) or "").strip().lower()
-            doc.meta.template_keep_content = mode in _TEMPLATE_KEEP_KEYWORDS
+            modes = {t for t in re.split(r"[\s,;]+", mode) if t}
+            doc.meta.template_keep_content = bool(modes & _TEMPLATE_KEEP_KEYWORDS)
+            doc.meta.template_style_numbering = bool(
+                modes & _TEMPLATE_STYLE_NUMBERING_KEYWORDS
+            )
 
 
 def _detect_language(preamble: str) -> str | None:

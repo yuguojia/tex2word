@@ -74,6 +74,9 @@ class DocumentWriter:
         caption_config: CaptionConfig | None = None,
         cjk_quote_hint: bool = False,
         num_ids: NumIds | None = None,
+        style_numbering: bool = False,
+        bullet_list_style_id: str | None = None,
+        number_list_style_id: str | None = None,
     ) -> None:
         self.report = report
         self.base_dir = base_dir
@@ -123,6 +126,12 @@ class DocumentWriter:
         self.cjk_quote_hint = cjk_quote_hint
         self.citation_mode = citation_mode
         self.columns = max(columns, 1)
+        #: In \texwordtemplate[style-numbering] mode the reference template's
+        #: paragraph styles carry numbering, so generated body paragraphs should
+        #: not stamp explicit w:numPr/w:numId.
+        self.style_numbering = style_numbering
+        self._bullet_list_style = bullet_list_style_id or "ListBullet"
+        self._number_list_style = number_list_style_id or "ListNumber"
         #: page geometry (from a --reference-doc), or None for the built-in default.
         self.page_pgsz = page_pgsz
         self.page_pgmar = page_pgmar
@@ -281,16 +290,22 @@ class DocumentWriter:
         # named paragraph style (whose linked multilevel list numId 4/5 point at).
         if block.part and self.part_style_id:
             style = self.part_style_id
+        elif block.part and self.style_numbering:
+            style = "part"
         elif block.appendix and 1 <= block.level <= 4:
             appendix_sid = self.appendix_style_ids[block.level - 1]
             if appendix_sid:
                 style = appendix_sid
+            elif self.style_numbering:
+                style = f"appendix{block.level}"
         if not block.numbered and not block.part and 1 <= block.level <= 5:
             star_sid = self.star_heading_style_ids[block.level - 1]
             if star_sid:
                 style = star_sid
         p = self._styled_paragraph(style)
-        if block.part and block.numbered:
+        if self.style_numbering:
+            pass
+        elif block.part and block.numbered:
             ppr = p.find(_qn("w:pPr"))
             assert ppr is not None
             numpr = sub(ppr, "w:numPr")
@@ -464,10 +479,10 @@ class DocumentWriter:
             if not isinstance(inner, ir.Paragraph):
                 self._block(inner, body)
                 continue
-            p = self._styled_paragraph("Normal")
+            p = self._styled_paragraph(self._list_style(num_id) if not marked else "Normal")
             ppr = p.find(_qn("w:pPr"))
             assert ppr is not None
-            if not marked:
+            if not marked and not self.style_numbering:
                 numpr = sub(ppr, "w:numPr")
                 sub(numpr, "w:ilvl", **{"w:val": str(level)})
                 sub(numpr, "w:numId", **{"w:val": str(num_id)})
@@ -475,19 +490,32 @@ class DocumentWriter:
                 # to its list number (a REF \r field).
                 self._bookmark_list_item(item, p)
                 marked = True
-            else:
+            elif marked:
                 sub(ppr, "w:ind", **{"w:left": str((level + 1) * 360)})
+            if self.style_numbering and not marked:
+                self._bookmark_list_item(item, p)
+                marked = True
             self._inlines(inner.inlines, p)
             body.append(p)
         if not marked:
-            p = self._styled_paragraph("Normal")
+            p = self._styled_paragraph(self._list_style(num_id))
             ppr = p.find(_qn("w:pPr"))
             assert ppr is not None
-            numpr = sub(ppr, "w:numPr")
-            sub(numpr, "w:ilvl", **{"w:val": str(level)})
-            sub(numpr, "w:numId", **{"w:val": str(num_id)})
+            if not self.style_numbering:
+                numpr = sub(ppr, "w:numPr")
+                sub(numpr, "w:ilvl", **{"w:val": str(level)})
+                sub(numpr, "w:numId", **{"w:val": str(num_id)})
             self._bookmark_list_item(item, p)
             body.append(p)
+
+    def _list_style(self, num_id: int) -> str:
+        if not self.style_numbering:
+            return "Normal"
+        return (
+            self._number_list_style
+            if num_id == self._num_ids.decimal
+            else self._bullet_list_style
+        )
 
     def _bookmark_list_item(self, item: ir.ListItem, p: _Element) -> None:
         """Wrap a numbered list-item paragraph in its label bookmark, if any."""

@@ -46,6 +46,20 @@ those documents surfaced.
   Word hard page breaks (`w:br w:type="page"`), so the current page ends even
   when it is not full. The break is represented in the IR and manifest, so
   `to-latex` can round-trip it.
+- **Template-driven numbering mode (`\texwordtemplate[style-numbering]{...}`).**
+  A new in-source template option trusts the Word template's paragraph styles to
+  carry numbering instead of stamping generated body paragraphs with tex2word
+  `w:numPr` / `w:numId` values. In this mode the template's `word/numbering.xml`
+  is copied unchanged: `\chapter`, `\section` and deeper sectioning commands only
+  apply Heading 1–5 paragraph styles; `itemize` uses the template's `List Bullet`
+  style; `enumerate` uses `List Number`; appendix headings use `appendix1`..
+  `appendix4`; and `\part` uses `part`. Existing `\texwordstyle` bindings still
+  win, so a source can override `itemize` / `enumerate`, appendix levels or `part`
+  by naming a template style. Built-in heading/list styles are still resolved
+  through the existing fuzzy style matching: localized or short styleIds such as
+  `a1` are normalized by built-in style name when available, and heading styles
+  can also be recognized from their Word outline level (`w:outlineLvl`) when the
+  style name is not literally `heading 1`..`heading 5`.
 - **Custom Word styles for starred headings.** Starred sectioning commands can
   now opt out of the built-in Heading 1–5 styles while leaving numbered headings
   unchanged: bind by command name (`\texwordstyle{section*}{...}`,
@@ -330,6 +344,8 @@ those documents surfaced.
   | --- | --- | --- |
   | `appendix1`..`appendix4` | appendix heading levels 1–4 (style + linked numbering) | explicit only |
   | `part` | `\part` heading (style + linked numbering) | explicit only |
+  | `itemize` / `listbullet` | `itemize` list-item paragraphs (default `List Bullet` in `style-numbering` mode) | explicit; name auto-discovery in `style-numbering` mode |
+  | `enumerate` / `listnumber` | `enumerate` list-item paragraphs (default `List Number` in `style-numbering` mode) | explicit; name auto-discovery in `style-numbering` mode |
   | `figure` | the paragraph holding an inserted image / TikZ / sub-figure image | explicit only |
   | `caption` | default caption style for all caption kinds | explicit only |
   | `figurecaption` | figure captions (overrides `caption`) | explicit only |

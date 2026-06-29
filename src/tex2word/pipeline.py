@@ -95,7 +95,8 @@ def convert_source(
     effective_columns = columns if columns and columns > 1 else max(doc.meta.columns, 1)
 
     # \texwordstyle bindings: appendix1..4 / part / figure / caption -> styleIds.
-    roles = _resolve_role_styles(doc, reference, report)
+    style_numbering = bool(reference and doc.meta.template_style_numbering)
+    roles = _resolve_role_styles(doc, reference, report, style_numbering=style_numbering)
 
     if language is not None:
         doc.meta.language = language  # CLI/API override of the detected language
@@ -150,6 +151,9 @@ def convert_source(
         caption_config=caption_config,
         cjk_quote_hint=cjk_quote_hint,
         num_ids=num_ids,
+        style_numbering=style_numbering,
+        bullet_list_style_id=roles.itemize,
+        number_list_style_id=roles.enumerate,
     )
     document_xml = writer.build(doc)
     styles_xml = reference.styles_xml if reference else load_styles_xml()
@@ -169,7 +173,9 @@ def convert_source(
             cjk_mono=doc.meta.cjk_mono_font,
         )
     numbering = numbering_xml()
-    if reference and reference.raw_numbering is not None:
+    if style_numbering and reference and reference.raw_numbering is not None:
+        numbering = reference.raw_numbering
+    elif reference and reference.raw_numbering is not None:
         from .backend.numbering import reference_numbering
 
         # carry the template's numbering verbatim + our role numIds (num_ids);
@@ -346,6 +352,8 @@ class _RoleStyles:
     table_text: str | None = None  # paragraph style for text inside table cells
     threeline_table: str | None = None  # Word table style for a 三线表 (first cmd \toprule)
     body: str | None = None  # paragraph style for ordinary body-text (正文) paragraphs
+    itemize: str | None = None  # paragraph style for itemize list items
+    enumerate: str | None = None  # paragraph style for enumerate list items
     star_headings: list = field(default_factory=lambda: [None, None, None, None, None])
     style_remap: dict = field(default_factory=dict)  # canonical styleId -> effective
     # {lower-cased template style name -> effective styleId}: lets a per-paragraph
@@ -386,6 +394,10 @@ def _assign_role(styles: _RoleStyles, role: str, sid: str, *, book: bool = False
         styles.threeline_table = sid
     elif role == "body":
         styles.body = sid
+    elif role in ("itemize", "listbullet"):
+        styles.itemize = sid
+    elif role in ("enumerate", "listnumber"):
+        styles.enumerate = sid
     elif role in _CAPTION_ROLE_KIND:
         styles.captions[_CAPTION_ROLE_KIND[role]] = sid
     elif role.startswith("appendix"):
@@ -394,7 +406,13 @@ def _assign_role(styles: _RoleStyles, role: str, sid: str, *, book: bool = False
         styles.style_remap[_PARAGRAPH_STYLE_ROLES[role][0]] = sid
 
 
-def _resolve_role_styles(doc: ir.Document, reference, report: ConversionReport) -> _RoleStyles:
+def _resolve_role_styles(
+    doc: ir.Document,
+    reference,
+    report: ConversionReport,
+    *,
+    style_numbering: bool = False,
+) -> _RoleStyles:
     """Resolve ``\\texwordstyle`` role->style bindings to reference-template styleIds.
 
     An explicit ``\\texwordstyle{role}{name}`` binds by style *name*. When a
@@ -439,6 +457,33 @@ def _resolve_role_styles(doc: ir.Document, reference, report: ConversionReport) 
                         f"\\texwordstyle: style {name!r} for '{role}' not found in {where}")
             continue
         _assign_role(styles, role, sid, book=doc.book)
+
+    if style_numbering:
+        defaults = {
+            "appendix1": ("appendix1",),
+            "appendix2": ("appendix2",),
+            "appendix3": ("appendix3",),
+            "appendix4": ("appendix4",),
+            "part": ("part",),
+            "itemize": ("list bullet", "listbullet"),
+            "enumerate": ("list number", "listnumber"),
+        }
+        for role, candidates in defaults.items():
+            if role in overrides:
+                continue
+            if role.startswith("appendix") and styles.appendix[int(role[-1]) - 1]:
+                continue
+            if role == "part" and styles.part:
+                continue
+            if role == "itemize" and styles.itemize:
+                continue
+            if role == "enumerate" and styles.enumerate:
+                continue
+            for cand in candidates:
+                sid = resolve(cand)
+                if sid:
+                    _assign_role(styles, role, sid, book=doc.book)
+                    break
 
     # unbound generic paragraph roles: auto-discover by name, else keep built-in.
     for role, (canonical, names) in _PARAGRAPH_STYLE_ROLES.items():
