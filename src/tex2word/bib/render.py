@@ -235,7 +235,7 @@ def _walk_cites(blocks: list[ir.Block], out: list[ir.Cite]) -> None:
         for n in inlines:
             if isinstance(n, ir.Cite):
                 out.append(n)
-            elif isinstance(n, ir.Emphasis | ir.Link | ir.Footnote):
+            elif isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Footnote):
                 inl(n.inlines)
 
     for block in blocks:

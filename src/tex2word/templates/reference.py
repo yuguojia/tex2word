@@ -61,6 +61,7 @@ class ReferenceParts:
     endnotes_xml: bytes | None = None  # template endnotes.xml, separator notes only
     raw_numbering: bytes | None = None  # the template's word/numbering.xml, if present
     style_name_to_id: dict[str, str] = field(default_factory=dict)  # w:name -> styleId
+    char_style_name_to_id: dict[str, str] = field(default_factory=dict)  # w:name -> char styleId
     heading_rename: dict[str, str] = field(default_factory=dict)  # template id -> our id
     theme_xml: bytes | None = None  # word/theme/theme1.xml, if present
     page_pgsz: dict[str, str] | None = None  # body w:pgSz attributes
@@ -96,6 +97,7 @@ def extract_reference(docx_bytes: bytes) -> ReferenceParts:
         styles_root = etree.fromstring(styles_bytes)
         heading_rename = _compute_builtin_rename(styles_root)
         name_to_id = _style_name_to_id(styles_root)
+        char_name_to_id = _char_style_name_to_id(styles_root)
         raw_numbering = zf.read("word/numbering.xml") if "word/numbering.xml" in names else None
         theme = None
         # the theme part name varies (theme1.xml); take the first under word/theme/
@@ -119,7 +121,9 @@ def extract_reference(docx_bytes: bytes) -> ReferenceParts:
         return ReferenceParts(styles_xml=styles, settings_xml=settings,
                               footnotes_xml=footnotes, endnotes_xml=endnotes,
                               raw_numbering=raw_numbering,
-                              style_name_to_id=name_to_id, heading_rename=heading_rename,
+                              style_name_to_id=name_to_id,
+                              char_style_name_to_id=char_name_to_id,
+                              heading_rename=heading_rename,
                               theme_xml=theme, page_pgsz=pgsz, page_pgmar=pgmar,
                               headers_footers=hfs, skipped_header_footers=skipped)
     except ValueError:
@@ -192,6 +196,42 @@ def _style_name_to_id(root: etree._Element) -> dict[str, str]:
         name = name_el.get(_w("val")) if name_el is not None else None
         if sid and name:
             out.setdefault(name.strip().lower(), sid)
+    return out
+
+
+def _char_style_name_to_id(root: etree._Element) -> dict[str, str]:
+    """{lower-cased style name -> character styleId}.
+
+    Character styles resolve by their own display name. A paragraph style whose
+    ``w:link`` points at a character style also resolves by the paragraph style's
+    display name, matching Word's linked paragraph/character style UI.
+    """
+    styles = root.findall(_w("style"))
+    by_id = {
+        style.get(_w("styleId")): style
+        for style in styles
+        if style.get(_w("styleId"))
+    }
+    out: dict[str, str] = {}
+
+    def name_of(style: etree._Element) -> str | None:
+        name_el = style.find(_w("name"))
+        name = name_el.get(_w("val")) if name_el is not None else None
+        return name.strip().lower() if name else None
+
+    for style in styles:
+        sid = style.get(_w("styleId"))
+        name = name_of(style)
+        if not sid or not name:
+            continue
+        if style.get(_w("type")) == "character":
+            out.setdefault(name, sid)
+            continue
+        link = style.find(_w("link"))
+        linked_id = link.get(_w("val")) if link is not None else None
+        linked = by_id.get(linked_id)
+        if linked is not None and linked.get(_w("type")) == "character" and linked_id:
+            out.setdefault(name, linked_id)
     return out
 
 

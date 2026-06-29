@@ -201,6 +201,8 @@ class LatexWriter:
             return f"\\begin{{quote}}\n{self._blocks(block.blocks)}\n\\end{{quote}}"
         if isinstance(block, ir.Theorem):
             return self._theorem(block)
+        if isinstance(block, ir.PageBreak):
+            return "\\clearpage" if block.command == "clearpage" else "\\newpage"
         if isinstance(block, ir.Algorithm):
             return self._algorithm(block)
         if isinstance(block, ir.Bibliography):
@@ -353,6 +355,8 @@ class LatexWriter:
         if isinstance(node, ir.Emphasis):
             cmd = _EMPH_CMD.get(node.kind_, "emph")
             return f"\\{cmd}{{{self._inlines(node.inlines)}}}"
+        if isinstance(node, ir.CharStyle):
+            return f"\\texwordcharstyle{{{latex_escape(node.style)}}}{{{self._inlines(node.inlines)}}}"
         if isinstance(node, ir.Math):
             return f"${node.latex}$"
         if isinstance(node, ir.DisplayMath):
@@ -480,7 +484,10 @@ def _scan_inlines(inlines: list, feat: _Features) -> None:
             feat.graphics = True
         elif isinstance(node, ir.IndexEntry):
             feat.index = True
-        elif isinstance(node, ir.Emphasis | ir.Footnote | ir.Endnote | ir.Colored | ir.FontSize):
+        elif isinstance(
+            node,
+            ir.Emphasis | ir.CharStyle | ir.Footnote | ir.Endnote | ir.Colored | ir.FontSize,
+        ):
             _scan_inlines(node.inlines, feat)
 
 

@@ -110,12 +110,12 @@ _THEOREM_KINDS = {
 
 
 def _all_text(inlines: list[ir.Inline]) -> str:
-    """All text, recursing into Emphasis/Colored/FontSize wrappers (e.g. code)."""
+    """All text, recursing into inline style wrappers (e.g. code)."""
     out: list[str] = []
     for i in inlines:
         if isinstance(i, ir.Text):
             out.append(i.value)
-        elif isinstance(i, ir.Emphasis | ir.Colored | ir.FontSize):
+        elif isinstance(i, ir.Emphasis | ir.CharStyle | ir.Colored | ir.FontSize):
             out.append(_all_text(i.inlines))
     return "".join(out)
 _EMPH_FROM_RPR = [  # (rPr child localname, emphasis kind)
@@ -140,6 +140,18 @@ def _has_prose_text(p: etree._Element) -> bool:
     """Whether *p* carries prose runs (``w:t``) outside any math zone -- the marker
     of an equation embedded alongside explanatory text (math uses ``m:t``)."""
     return any((t.text or "").strip() for t in p.iter(_w("t")))
+
+
+def _is_page_break_paragraph(p: etree._Element) -> bool:
+    if not any((br.get(_w("type")) or "") == "page" for br in p.iter(_w("br"))):
+        return False
+    if _has_prose_text(p):
+        return False
+    return (
+        p.find(f".//{_w('drawing')}") is None
+        and p.find(f".//{_m('oMath')}") is None
+        and p.find(f".//{_m('oMathPara')}") is None
+    )
 
 
 def read_docx(docx_bytes: bytes, label_map: dict[str, str] | None = None) -> ir.Document:
@@ -377,6 +389,8 @@ class _Reader:
 
     def _paragraph(self, p: etree._Element) -> ir.Block | None:
         style = self._style(p) or "Normal"
+        if _is_page_break_paragraph(p):
+            return ir.PageBreak()
         # display math paragraph (unnumbered: m:oMathPara). A paragraph that *also*
         # carries prose (w:t) is an equation embedded with explanatory text -- read
         # it as a Paragraph with a DisplayMath inline (handled by _runs) instead.

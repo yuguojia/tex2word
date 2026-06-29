@@ -131,14 +131,22 @@ The GUI depends on this package for the actual conversion, so everything in
   template works too. Without the bookmark it falls back to styling-only and warns.
   `\texwordparstyle{Style Name}` sets the Word style of the single paragraph it
   precedes (like `\noindent`, its scope is one paragraph), naming a template style
-  by its display name.
+  by its display name. `\texwordcharstyle{Style Name}{text}` applies a Word
+  character style to inline text; if `Style Name` is a linked paragraph/character
+  style, the linked character style is used. The declaration form
+  `{\texwordcharstyle{Style Name}text}` is also supported.
 - **Structure & styles**: `\title`/`\author`/`\date`/`abstract`, `\section`…
   `\subparagraph` → Word Title/Heading 1–4 (visible in the Navigation pane),
   paragraphs, `\textbf`/`\emph`/`\texttt`/`\underline`/`\textsc`, quotes, code.
   Sections are **auto-numbered** (multilevel `1` / `1.1` / `1.1.1`) like LaTeX,
   with `\section*` unnumbered; `\ref` to a section shows its live number. In
   **book/report** documents `\chapter` is the top level (sections nest under it)
-  and `\appendix` switches to lettered headings (`A`, `A.1`).
+  and `\appendix` switches to lettered headings (`A`, `A.1`). Starred headings
+  can be bound to reference-doc styles separately, e.g.
+  `\texwordstyle{section*}{Unnumbered Heading}` or level-based
+  `\texwordstyle{heading2*}{...}`, without changing numbered Heading 1–5 output.
+- **Hard page breaks**: `\newpage`, `\clearpage` and `\pagebreak` emit a Word
+  hard page break, ending the current page even when it is not full.
 - **Math (direct LaTeX→OMML)**: inline `$…$`, display `\[…\]`,
   `equation`/`align`/`gather`; fractions, sub/superscripts, roots, `\sum`/`\int`
   with limits, accents, `\left…\right` delimiters, matrices/`cases`, Greek and
@@ -149,7 +157,10 @@ The GUI depends on this package for the actual conversion, so everything in
   bookmarks; `\ref`/`\eqref`/`\pageref` become `REF`/`PAGEREF` fields; figure
   and table captions get `SEQ Figure`/`SEQ Table`. Numbers auto-renumber in
   Word on field refresh. `--number-by-section` switches to `N.M` per-section
-  numbering (`STYLEREF` + `SEQ \s`), book/report style.
+  numbering (`STYLEREF` + `SEQ \s`), book/report style. The caption identifier
+  part (`Figure 1-1:`) can take a Word character style with
+  `\texwordcaption{labelstyle}{Style Name}` or per-kind keys such as
+  `\texwordcaption{figurelabelstyle}{Style Name}`.
 - **Table of contents** ★: `\tableofcontents` → a live Word `TOC` field (rebuilds
   from heading styles on refresh); `\listoffigures`/`\listoftables` → caption-
   sequence lists. Schema-valid and round-tripping.

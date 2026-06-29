@@ -75,6 +75,21 @@ def test_unknown_macro_degrades_gracefully():
     assert any("weirdmacro" in w.construct for w in report.warnings)
 
 
+def test_commented_texwordstyle_directive_is_ignored():
+    doc, _ = parse_document(
+        r"""
+\texwordstyle{tablecaption}{VD_Table_Title}
+%\texwordstyle{threelinetable}{三线表}
+\texwordstyle{Abstract}{BD_Abstract}
+\begin{document}Text.\end{document}
+"""
+    )
+    assert doc.meta.style_overrides == {
+        "tablecaption": "VD_Table_Title",
+        "abstract": "BD_Abstract",
+    }
+
+
 def test_newcommand_expansion():
     expanded = expand_macros(r"\newcommand{\foo}[1]{Hello #1!}\foo{World}")
     assert "Hello World!" in expanded

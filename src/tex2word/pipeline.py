@@ -95,7 +95,7 @@ def convert_source(
     effective_columns = columns if columns and columns > 1 else max(doc.meta.columns, 1)
 
     # \texwordstyle bindings: appendix1..4 / part / figure / caption -> styleIds.
-    roles = _resolve_role_styles(doc.meta, reference, report)
+    roles = _resolve_role_styles(doc, reference, report)
 
     if language is not None:
         doc.meta.language = language  # CLI/API override of the detected language
@@ -143,8 +143,10 @@ def convert_source(
         table_text_style_id=roles.table_text,
         threeline_table_style_id=roles.threeline_table,
         body_style_id=roles.body,
+        star_heading_style_ids=roles.star_headings,
         style_remap=roles.style_remap,
         par_style_names=roles.par_style_names,
+        char_style_names=roles.char_style_names,
         caption_config=caption_config,
         cjk_quote_hint=cjk_quote_hint,
         num_ids=num_ids,
@@ -306,6 +308,31 @@ _PARAGRAPH_STYLE_ROLES = {
     "footnote":     ("FootnoteText", ["footnote text", "footnote"]),
 }
 
+_STAR_HEADING_ROLE_LEVEL = {
+    "heading1*": 1,
+    "heading2*": 2,
+    "heading3*": 3,
+    "heading4*": 4,
+    "heading5*": 5,
+    "chapter*": 1,
+}
+
+_STAR_HEADING_ARTICLE_LEVEL = {
+    "section*": 1,
+    "subsection*": 2,
+    "subsubsection*": 3,
+    "paragraph*": 4,
+    "subparagraph*": 4,
+}
+
+_STAR_HEADING_BOOK_LEVEL = {
+    "section*": 2,
+    "subsection*": 3,
+    "subsubsection*": 4,
+    "paragraph*": 5,
+    "subparagraph*": 5,
+}
+
 
 @dataclass
 class _RoleStyles:
@@ -319,10 +346,15 @@ class _RoleStyles:
     table_text: str | None = None  # paragraph style for text inside table cells
     threeline_table: str | None = None  # Word table style for a 三线表 (first cmd \toprule)
     body: str | None = None  # paragraph style for ordinary body-text (正文) paragraphs
+    star_headings: list = field(default_factory=lambda: [None, None, None, None, None])
     style_remap: dict = field(default_factory=dict)  # canonical styleId -> effective
     # {lower-cased template style name -> effective styleId}: lets a per-paragraph
     # \texwordparstyle{name} directive name any reference-doc style by display name.
     par_style_names: dict = field(default_factory=dict)
+    # {lower-cased style name -> effective character styleId}: lets
+    # \texwordcharstyle{name}{text} name a character style or a linked
+    # paragraph/character style by the display name visible in Word.
+    char_style_names: dict = field(default_factory=dict)
 
     def caption_styles(self) -> dict:
         """{caption kind -> styleId}, each per-type override falling back to caption."""
@@ -330,9 +362,19 @@ class _RoleStyles:
                 for kind in _CAPTION_ROLE_KIND.values()}
 
 
-def _assign_role(styles: _RoleStyles, role: str, sid: str) -> None:
+def _star_heading_level(role: str, *, book: bool) -> int | None:
+    if role in _STAR_HEADING_ROLE_LEVEL:
+        return _STAR_HEADING_ROLE_LEVEL[role]
+    levels = _STAR_HEADING_BOOK_LEVEL if book else _STAR_HEADING_ARTICLE_LEVEL
+    return levels.get(role)
+
+
+def _assign_role(styles: _RoleStyles, role: str, sid: str, *, book: bool = False) -> None:
     """Record a resolved styleId for *role* on the right field of *styles*."""
-    if role == "part":
+    star_level = _star_heading_level(role, book=book)
+    if star_level is not None:
+        styles.star_headings[star_level - 1] = sid
+    elif role == "part":
         styles.part = sid
     elif role == "figure":
         styles.figure = sid
@@ -352,7 +394,7 @@ def _assign_role(styles: _RoleStyles, role: str, sid: str) -> None:
         styles.style_remap[_PARAGRAPH_STYLE_ROLES[role][0]] = sid
 
 
-def _resolve_role_styles(meta, reference, report: ConversionReport) -> _RoleStyles:
+def _resolve_role_styles(doc: ir.Document, reference, report: ConversionReport) -> _RoleStyles:
     """Resolve ``\\texwordstyle`` role->style bindings to reference-template styleIds.
 
     An explicit ``\\texwordstyle{role}{name}`` binds by style *name*. When a
@@ -364,8 +406,10 @@ def _resolve_role_styles(meta, reference, report: ConversionReport) -> _RoleStyl
     binding naming a style the template lacks is warned about and left unresolved.
     """
     styles = _RoleStyles()
+    meta = doc.meta
     overrides = getattr(meta, "style_overrides", None) or {}
     name_to_id = reference.style_name_to_id if reference else {}
+    char_name_to_id = reference.char_style_name_to_id if reference else {}
     heading_rename = reference.heading_rename if reference else {}
 
     def resolve(name: str) -> str | None:
@@ -377,6 +421,15 @@ def _resolve_role_styles(meta, reference, report: ConversionReport) -> _RoleStyl
     styles.par_style_names = {
         name: heading_rename.get(sid, sid) for name, sid in name_to_id.items()
     }
+    if not char_name_to_id:
+        from lxml import etree
+
+        from .templates.reference import _char_style_name_to_id
+
+        char_name_to_id = _char_style_name_to_id(etree.fromstring(load_styles_xml()))
+    styles.char_style_names = {
+        name: heading_rename.get(sid, sid) for name, sid in char_name_to_id.items()
+    }
 
     for role, name in overrides.items():
         sid = resolve(name)
@@ -385,7 +438,7 @@ def _resolve_role_styles(meta, reference, report: ConversionReport) -> _RoleStyl
             report.warn("reference-doc",
                         f"\\texwordstyle: style {name!r} for '{role}' not found in {where}")
             continue
-        _assign_role(styles, role, sid)
+        _assign_role(styles, role, sid, book=doc.book)
 
     # unbound generic paragraph roles: auto-discover by name, else keep built-in.
     for role, (canonical, names) in _PARAGRAPH_STYLE_ROLES.items():
