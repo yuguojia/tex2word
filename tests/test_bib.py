@@ -122,6 +122,21 @@ def test_citet_author_year(tmp_path):
     assert "Einstein (1905)" in text
 
 
+def test_cite_inside_table_cell_resolves(tmp_path):
+    # A \cite that appears only inside a tabular cell must still be collected by
+    # the citation pass -> numbered [1] and added to the reference list, not left
+    # as the raw key. (Regression: _walk_cites skipped ir.Table.)
+    body = (
+        r"\begin{table}\caption{T}\begin{tabular}{ll}"
+        r"A & \cite{e1905} \\ B & \cite{k1984} \\"
+        r"\end{tabular}\end{table}"
+    )
+    text = _cite_text(body, "plain", tmp_path)
+    assert "[1]" in text and "[2]" in text
+    assert "e1905" not in text and "k1984" not in text  # raw keys must not leak
+    assert "Einstein" in text  # reference list generated even without \bibliography body
+
+
 def test_thebibliography():
     src = (
         r"\begin{document}See \cite{a}."
