@@ -231,11 +231,11 @@ def build_bibliography(
 
 
 def _walk_cites(blocks: list[ir.Block], out: list[ir.Cite]) -> None:
-    def inl(inlines: list[ir.Inline]) -> None:
-        for n in inlines:
+    def inl(inlines: list[ir.Inline] | None) -> None:
+        for n in inlines or []:
             if isinstance(n, ir.Cite):
                 out.append(n)
-            elif isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Footnote):
+            elif isinstance(n, ir.Emphasis | ir.CharStyle | ir.Link | ir.Footnote | ir.Endnote):
                 inl(n.inlines)
 
     for block in blocks:
@@ -246,6 +246,23 @@ def _walk_cites(blocks: list[ir.Block], out: list[ir.Cite]) -> None:
         elif isinstance(block, ir.ItemList):
             for item in block.items:
                 _walk_cites(item.blocks, out)
+        elif isinstance(block, ir.Table):
+            # cites can live in the caption or in any cell (which holds blocks)
+            inl(block.caption)
+            for row in block.rows:
+                for cell in row.cells:
+                    _walk_cites(cell.blocks, out)
+        elif isinstance(block, ir.Theorem):
+            inl(block.title)
+            _walk_cites(block.blocks, out)
+        elif isinstance(block, ir.Figure):
+            inl(block.caption)
+            for sub in block.subfigures:
+                inl(sub.caption)
+        elif isinstance(block, ir.Algorithm):
+            inl(block.caption)
+            for line in block.lines:
+                inl(line.inlines)
 
 
 def resolve_citations(
