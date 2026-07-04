@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import io
+import zipfile
+
 from conftest import NS, document_root, part_names
+from lxml import etree
 
 from tex2word import convert_source
 
@@ -30,6 +34,32 @@ def test_headings_get_styles():
     styles = [e.get(f"{{{NS['w']}}}val") for e in _xpath(root, "//w:pStyle")]
     assert "Heading1" in styles
     assert "Heading2" in styles
+
+
+def test_default_styles_have_expected_priorities():
+    docx = convert_source(r"\begin{document}\section{A}\end{document}").docx
+    zf = zipfile.ZipFile(io.BytesIO(docx))
+    root = etree.fromstring(zf.read("word/styles.xml"))
+
+    expected = {
+        "Heading1": "9",
+        "Heading2": "9",
+        "Heading3": "9",
+        "Heading4": "9",
+        "Heading5": "9",
+        "Bibliography": "37",
+        "Caption": "35",
+        "Quote": "29",
+        "FootnoteReference": "99",
+        "FootnoteText": "99",
+        "Hyperlink": "99",
+    }
+    for style_id, expected_priority in expected.items():
+        priority = _xpath(
+            root,
+            f'//w:style[@w:styleId="{style_id}"]/w:uiPriority/@w:val',
+        )
+        assert priority == [expected_priority]
 
 
 def test_inline_math_produces_omath():

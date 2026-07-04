@@ -239,6 +239,28 @@ def test_merge_remaps_localized_builtin_styleids():
     assert 'w:link w:val="Heading1"' in merged
 
 
+def test_merge_adds_missing_link_and_footnote_styles_with_word_ui_priority():
+    from tex2word.templates import load_styles_xml
+
+    reference = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{_W}">
+  <w:latentStyles w:defUIPriority="99">
+    <w:lsdException w:name="Hyperlink" w:semiHidden="1" w:unhideWhenUsed="1"/>
+    <w:lsdException w:name="footnote text" w:semiHidden="1" w:unhideWhenUsed="1"/>
+    <w:lsdException w:name="footnote reference" w:semiHidden="1" w:unhideWhenUsed="1"/>
+  </w:latentStyles>
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+</w:styles>""".encode()
+
+    root = etree.fromstring(merge_styles(reference, load_styles_xml()))
+    for sid in ("Hyperlink", "FootnoteText", "FootnoteReference"):
+        priority = root.xpath(
+            f'//w:style[@w:styleId="{sid}"]/w:uiPriority/@w:val',
+            namespaces={"w": _W},
+        )
+        assert priority == ["99"]
+
+
 # -- end-to-end through the pipeline ----------------------------------------- #
 
 
@@ -918,6 +940,38 @@ def test_generic_paragraph_style_explicit_binding_wins(tmp_path):
     doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
     assert 'w:pStyle w:val="pt"' in doc  # the bound 部分标题 (styleId pt) wins
     assert 'w:pStyle w:val="abs"' not in doc
+
+
+def test_explicit_abstract_and_sourcecode_bindings_omit_bundled_styles(tmp_path):
+    styles = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="{_W}">
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="pt"><w:name w:val="部分标题"/></w:style>
+</w:styles>""".encode()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/styles.xml", styles)
+        z.writestr("word/document.xml", _REF_DOC)
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(buf.getvalue())
+
+    src = (
+        r"\texwordstyle{abstract}{部分标题}"
+        r"\texwordstyle{sourcecode}{部分标题}"
+        r"\begin{document}"
+        r"\begin{abstract}S.\end{abstract}"
+        r"\begin{verbatim}code here\end{verbatim}"
+        r"\end{document}"
+    )
+    docx = convert_source(src, reference_doc=str(ref)).docx
+    doc = _part(docx, "word/document.xml").decode()
+    styles_xml = _part(docx, "word/styles.xml").decode()
+
+    assert doc.count('w:pStyle w:val="pt"') == 2
+    assert 'w:styleId="Abstract"' not in styles_xml
+    assert 'w:name w:val="Abstract"' not in styles_xml
+    assert 'w:styleId="SourceCode"' not in styles_xml
+    assert 'w:name w:val="Source Code"' not in styles_xml
 
 
 def test_body_style_follows_texwordstyle(tmp_path):

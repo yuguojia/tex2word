@@ -12,6 +12,27 @@ def load_styles_xml() -> bytes:
     return resources.files(__package__).joinpath("styles.xml").read_bytes()
 
 
+def remove_style_ids(styles_xml: bytes, style_ids: set[str]) -> bytes:
+    """Drop style definitions whose ``w:styleId`` is in *style_ids*."""
+    if not style_ids:
+        return styles_xml
+    from lxml import etree
+
+    def w(name: str) -> str:
+        return f"{{{_W}}}{name}"
+
+    try:
+        root = etree.fromstring(styles_xml)
+    except Exception:
+        return styles_xml
+    for style in list(root.findall(w("style"))):
+        sid = style.get(w("styleId"))
+        if sid in style_ids:
+            root.remove(style)
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+
+
 #: scripts whose BCP-47 codes belong in ``w:eastAsia`` (the East-Asian proofing
 #: language), not in ``w:val`` (which is the *Latin*-script language). Putting a
 #: CJK code in ``w:val`` makes Word treat ASCII runs as East-Asian and render
@@ -121,4 +142,3 @@ def apply_fonts(
                 set_rfonts(rpr, eastAsia=cjk_mono)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
-
