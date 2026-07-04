@@ -157,6 +157,10 @@ def convert_source(
     )
     document_xml = writer.build(doc)
     styles_xml = reference.styles_xml if reference else load_styles_xml()
+    if roles.suppressed_style_ids:
+        from .templates import remove_style_ids
+
+        styles_xml = remove_style_ids(styles_xml, roles.suppressed_style_ids)
     if doc.meta.language:
         from .templates import apply_language
 
@@ -363,6 +367,8 @@ class _RoleStyles:
     # \texwordcharstyle{name}{text} name a character style or a linked
     # paragraph/character style by the display name visible in Word.
     char_style_names: dict = field(default_factory=dict)
+    # Built-in style definitions to omit after an explicit \texwordstyle remap.
+    suppressed_style_ids: set[str] = field(default_factory=set)
 
     def caption_styles(self) -> dict:
         """{caption kind -> styleId}, each per-type override falling back to caption."""
@@ -457,6 +463,10 @@ def _resolve_role_styles(
                         f"\\texwordstyle: style {name!r} for '{role}' not found in {where}")
             continue
         _assign_role(styles, role, sid, book=doc.book)
+        if role in ("abstract", "sourcecode"):
+            canonical = _PARAGRAPH_STYLE_ROLES[role][0]
+            if sid != canonical:
+                styles.suppressed_style_ids.add(canonical)
 
     if style_numbering:
         defaults = {
