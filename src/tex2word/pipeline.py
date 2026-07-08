@@ -10,6 +10,7 @@ from .backend.document import DocumentWriter
 from .backend.numbering import numbering_xml
 from .backend.package import DocxPackage
 from .frontend import parse_document
+from .plugins import PluginRefs
 from .report import ConversionReport
 from .roundtrip import build_manifest
 from .templates import load_styles_xml
@@ -37,6 +38,7 @@ def convert_source(
     reference_doc: str | None = None,
     language: str | None = None,
     caption_locale: str = "auto",
+    plugins: PluginRefs | None = None,
 ) -> ConversionResult:
     """Convert a LaTeX string to a ``.docx`` (bytes) + IR + report.
 
@@ -56,12 +58,15 @@ def convert_source(
     ``caption_locale`` (``auto``/``en``/``zh-CN``) sets the caption and
     cross-reference wording; ``auto`` picks Chinese (图/表 + ``-`` separator) when
     the document language is ``zh-CN`` or a CJK font is set.
+    ``plugins`` contains optional Python plugin modules or ``.py`` files.
     """
+    if plugins and frontend == "latexml":
+        raise ValueError("tex2word Python plugins are only supported with frontend='pure'")
     if frontend == "latexml":
         from .frontend.latexml import parse_document as _parse
         doc, report = _parse(source, base_dir)
     else:
-        doc, report = parse_document(source, base_dir, csl_path=csl)
+        doc, report = parse_document(source, base_dir, csl_path=csl, plugins=plugins)
     resolve_crossrefs(doc, report)
 
     # The document preamble (TikZ libraries, colours, macros) is needed to
@@ -559,6 +564,7 @@ def convert_file(
     reference_doc: str | None = None,
     language: str | None = None,
     caption_locale: str = "auto",
+    plugins: PluginRefs | None = None,
 ) -> tuple[str, ConversionResult]:
     """Convert a ``.tex`` file to ``.docx`` on disk. Returns the output path."""
     with open(input_path, encoding="utf-8") as fh:
@@ -569,7 +575,7 @@ def convert_file(
         number_by_section=number_by_section, citation_mode=citation_mode,
         columns=columns, frontend=frontend, math_image_fallback=math_image_fallback,
         csl=csl, reference_doc=reference_doc, language=language,
-        caption_locale=caption_locale,
+        caption_locale=caption_locale, plugins=plugins,
     )
 
     if output_path is None:
