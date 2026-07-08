@@ -25,6 +25,7 @@ from pylatexenc.latexwalker import (
 from pylatexenc.macrospec import EnvironmentSpec, MacroSpec
 
 from .. import ir
+from ..plugins import PluginRefs, load_plugins
 from ..report import ConversionReport
 from . import siunitx
 from .colors import ColorTable
@@ -2221,12 +2222,18 @@ def _resolve_theorem_counters(
     return counters
 
 
-def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
+def _build_context(
+    extra_theorem_envs: tuple[str, ...] = (),
+    *,
+    extra_macros: tuple[MacroSpec, ...] = (),
+    extra_environments: tuple[EnvironmentSpec, ...] = (),
+):
     """Augment pylatexenc's default DB with arg signatures it lacks."""
     ctx = get_default_latex_context_db()
     ctx.add_context_category(
         "tex2word",
         macros=[
+            *extra_macros,
             # sectioning: \cmd*[short]{title} -- pylatexenc's defaults omit the
             # run-in \paragraph/\subparagraph, dropping their titles into the body
             MacroSpec("section", "*[{"),
@@ -2424,7 +2431,7 @@ def _build_context(extra_theorem_envs: tuple[str, ...] = ()):
             MacroSpec("subfloat", "[{"),
             MacroSpec("subfigure", "[{"),
         ],
-        environments=[
+        environments=[*extra_environments] + [
             EnvironmentSpec(name, "[")
             for name in (*_THEOREM_ENVS, "proof", *extra_theorem_envs)
         ] + [EnvironmentSpec("subfigure", "[{")] + [EnvironmentSpec("minipage", "[{")] + [
@@ -2616,24 +2623,36 @@ def _detect_columns(source: str) -> int:
 
 
 def parse_document(
-    source: str, base_dir: str = ".", csl_path: str | None = None
+    source: str,
+    base_dir: str = ".",
+    csl_path: str | None = None,
+    plugins: PluginRefs | None = None,
 ) -> tuple[ir.Document, ConversionReport]:
     """Parse LaTeX ``source`` into an IR :class:`~tex2word.ir.Document`.
 
     ``csl_path`` is an optional ``.csl`` style; when set (and ``citeproc-py`` is
     installed) citations and the reference list are formatted by the real CSL
-    engine instead of the built-in heuristic.
+    engine instead of the built-in heuristic. ``plugins`` may contain Python
+    module names, ``.py`` paths, or register callables.
     """
     report = ConversionReport()
+    plugin_registry = load_plugins(plugins, base_dir=base_dir)
     directive_source = flatten_inputs(strip_comments(source), base_dir)
-    expanded = replace_inline_tikz(expand_macros(preprocess(source, base_dir), base_dir))
+    processed = preprocess(source, base_dir)
+    for transform in plugin_registry.source_preprocessors:
+        processed = transform(processed, base_dir, report)
+    expanded = replace_inline_tikz(expand_macros(processed, base_dir))
     body, preamble = _split_document(expanded)
     # \newtheorem declarations may live in a \usepackage'd local .sty (e.g. a
     # paper's MyPreamble.sty), which macro expansion harvests but doesn't inline;
     # scan those sources too so the theorem environments are recognised.
     theorem_src = expanded + "\n" + local_package_sources(directive_source, base_dir)
     custom_theorems, unnumbered_theorems, shared_counters = _collect_newtheorems(theorem_src)
-    ctx = _build_context(tuple(custom_theorems))
+    ctx = _build_context(
+        tuple(custom_theorems),
+        extra_macros=tuple(plugin_registry.macro_specs),
+        extra_environments=tuple(plugin_registry.environment_specs),
+    )
     walker = LatexWalker(body, latex_context=ctx, tolerant_parsing=True)
     nodes, _, _ = walker.get_latex_nodes()
 

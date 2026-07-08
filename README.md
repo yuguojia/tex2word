@@ -36,6 +36,7 @@ pip install "tex2word[pdf,mathml,csl,mathimg]"   # everything
 tex2word convert paper.tex -o paper.docx
 tex2word convert paper.tex -o paper.docx --report report.json
 tex2word convert paper.tex -o paper.docx --reference-doc journal.docx
+tex2word convert paper.tex -o paper.docx --plugin examples/supp_plugin.py
 ```
 
 Or, for a development checkout with [uv](https://docs.astral.sh/uv/):
@@ -52,7 +53,34 @@ from tex2word import convert_source, convert_file
 
 out_path, result = convert_file("paper.tex")
 print(result.report.summary())   # math coverage + warnings
+
+result = convert_source(source, plugins=["examples/supp_plugin.py"])
 ```
+
+### Python plugins
+
+For stateful LaTeX extensions that are not expressible as simple
+`\newcommand` text expansion, load a Python plugin with `--plugin MODULE_OR_FILE.py`
+or pass `plugins=[...]` to `convert_source` / `convert_file`. A plugin exposes
+`register(registry)`, then can add source preprocessors and pylatexenc argument
+signatures:
+
+```python
+def register(registry):
+    registry.add_environment("suppitem", "{{")
+    registry.add_macro("supp", "{")
+    registry.add_macro("printsupp", "{")
+    registry.add_preprocessor(preprocess_source)
+
+
+def preprocess_source(source, base_dir, report):
+    ...
+    return source
+```
+
+See `examples/supp_plugin.py` for a complete implementation of
+`\begin{suppitem}{Kind}{key}...\end{suppitem}`, `\supp{key}`, and
+`\printsupp{Kind}`.
 
 ### Chinese / CJK documents (XeLaTeX)
 

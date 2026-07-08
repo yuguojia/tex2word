@@ -8,6 +8,7 @@ See ``README.md`` for the architecture overview. The public entry points are
 from __future__ import annotations
 
 from .pipeline import ConversionResult, convert_file, convert_source
+from .plugins import PluginRegistry
 
-__all__ = ["ConversionResult", "convert_file", "convert_source"]
+__all__ = ["ConversionResult", "PluginRegistry", "convert_file", "convert_source"]
 __version__ = "1.0.6"

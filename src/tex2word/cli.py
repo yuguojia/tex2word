@@ -49,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
         help="parser: 'pure' (pylatexenc) or 'latexml' (genuine TeX expansion)",
     )
     conv.add_argument(
+        "--plugin",
+        action="append",
+        default=[],
+        metavar="MODULE_OR_FILE.py",
+        help="load a tex2word Python plugin by module name or .py path "
+             "(may be given multiple times)",
+    )
+    conv.add_argument(
         "--math-image-fallback", action="store_true",
         help="render math that can't become OMML as an image (needs TeX or matplotlib)",
     )
@@ -252,6 +260,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
             reference_doc=args.reference_doc,
             language=args.lang,
             caption_locale=args.caption_locale,
+            plugins=args.plugin,
         )
     except FileNotFoundError:
         print(f"error: input file not found: {args.input}", file=sys.stderr)
