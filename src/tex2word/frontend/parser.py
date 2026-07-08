@@ -29,7 +29,7 @@ from ..report import ConversionReport
 from . import siunitx
 from .colors import ColorTable
 from .macros import expand_macros, local_package_sources
-from .preprocess import preprocess, replace_inline_tikz, strip_comments
+from .preprocess import flatten_inputs, preprocess, replace_inline_tikz, strip_comments
 
 # --------------------------------------------------------------------------- #
 # Static maps
@@ -2625,13 +2625,13 @@ def parse_document(
     engine instead of the built-in heuristic.
     """
     report = ConversionReport()
-    directive_source = strip_comments(source)
+    directive_source = flatten_inputs(strip_comments(source), base_dir)
     expanded = replace_inline_tikz(expand_macros(preprocess(source, base_dir), base_dir))
     body, preamble = _split_document(expanded)
     # \newtheorem declarations may live in a \usepackage'd local .sty (e.g. a
     # paper's MyPreamble.sty), which macro expansion harvests but doesn't inline;
     # scan those sources too so the theorem environments are recognised.
-    theorem_src = expanded + "\n" + local_package_sources(source, base_dir)
+    theorem_src = expanded + "\n" + local_package_sources(directive_source, base_dir)
     custom_theorems, unnumbered_theorems, shared_counters = _collect_newtheorems(theorem_src)
     ctx = _build_context(tuple(custom_theorems))
     walker = LatexWalker(body, latex_context=ctx, tolerant_parsing=True)

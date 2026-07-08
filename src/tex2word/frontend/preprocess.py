@@ -16,6 +16,17 @@ _INPUT_RE = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
 _IMPORT_RE = re.compile(
     r"\\(?:sub)?(?:import|includefrom|inputfrom)\s*\{([^}]+)\}\s*\{([^}]+)\}"
 )
+_RESOURCE_PATH_RE = re.compile(
+    r"\\(?P<cmd>includegraphics\*?|texwordtemplate|addbibresource|"
+    r"lstinputlisting|verbatiminput)\s*(?P<opts>(?:\[[^\]]*\]\s*)?)"
+    r"\{(?P<path>[^}]+)\}"
+)
+_BIBLIOGRAPHY_RE = re.compile(r"\\bibliography\s*\{(?P<names>[^}]+)\}")
+_USEPACKAGE_RE = re.compile(
+    r"\\(?P<cmd>usepackage|RequirePackage)\s*(?P<opts>(?:\[[^\]]*\]\s*)?)"
+    r"\{(?P<names>[^}]+)\}"
+)
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 # booktabs \cmidrule(lr){2-3} trim spec -- drop the (lr)/(l)/(r) so the static
 # parser sees a clean \cmidrule{2-3} mandatory argument.
 _CMIDRULE_TRIM_RE = re.compile(r"(\\cmidrule)\s*\([lr]*\)")
@@ -26,16 +37,109 @@ def strip_comments(source: str) -> str:
     return _COMMENT_RE.sub("", source)
 
 
-def flatten_inputs(source: str, base_dir: str, _depth: int = 0) -> str:
+def _portable_relpath(path: str, root_dir: str) -> str:
+    rel = os.path.relpath(path, root_dir)
+    return rel.replace(os.sep, "/")
+
+
+def _is_path_literal(path: str) -> bool:
+    """True for a static path we can safely rewrite."""
+    if not path or "{" in path or "}" in path:
+        return False
+    # Windows drive paths are absolute, not URI schemes.
+    if re.match(r"^[A-Za-z]:[\\/]", path):
+        return True
+    if "\\" in path:
+        return False
+    if _SCHEME_RE.match(path):
+        return False
+    return True
+
+
+def _rewrite_resource_path(path: str, current_dir: str, root_dir: str) -> str:
+    """Rewrite a path from current-file-relative to root-file-relative."""
+    leading = path[: len(path) - len(path.lstrip())]
+    trailing = path[len(path.rstrip()) :]
+    core = path.strip()
+    if not _is_path_literal(core) or os.path.isabs(core):
+        return path
+    absolute = os.path.normpath(os.path.join(current_dir, core))
+    return leading + _portable_relpath(absolute, root_dir) + trailing
+
+
+def _rewrite_bibliography_names(names: str, current_dir: str, root_dir: str) -> str:
+    parts = []
+    for name in names.split(","):
+        if name.strip():
+            parts.append(_rewrite_resource_path(name, current_dir, root_dir))
+        else:
+            parts.append(name)
+    return ",".join(parts)
+
+
+def _rewrite_local_package_names(names: str, current_dir: str, root_dir: str) -> str:
+    """Rewrite local package names only when the .sty exists beside this file."""
+    out: list[str] = []
+    for raw in names.split(","):
+        leading = raw[: len(raw) - len(raw.lstrip())]
+        trailing = raw[len(raw.rstrip()) :]
+        name = raw.strip()
+        if not name or not _is_path_literal(name) or os.path.isabs(name):
+            out.append(raw)
+            continue
+        local = os.path.join(current_dir, name + ".sty")
+        if os.path.isfile(local):
+            out.append(leading + _portable_relpath(local[:-4], root_dir) + trailing)
+        else:
+            out.append(raw)
+    return ",".join(out)
+
+
+def relativize_external_paths(source: str, current_dir: str, root_dir: str) -> str:
+    """Make resource paths stable after imported sources are flattened.
+
+    LaTeX's import package makes paths inside an imported file resolve relative
+    to that file. Our later parser/writer stages only carry one base directory,
+    so convert static resource paths to paths relative to the root .tex file.
+    """
+
+    current_dir = os.path.abspath(current_dir)
+    root_dir = os.path.abspath(root_dir)
+
+    def resource_repl(match: re.Match[str]) -> str:
+        path = _rewrite_resource_path(match.group("path"), current_dir, root_dir)
+        return f"\\{match.group('cmd')}{match.group('opts')}{{{path}}}"
+
+    def bibliography_repl(match: re.Match[str]) -> str:
+        names = _rewrite_bibliography_names(match.group("names"), current_dir, root_dir)
+        return f"\\bibliography{{{names}}}"
+
+    def usepackage_repl(match: re.Match[str]) -> str:
+        names = _rewrite_local_package_names(match.group("names"), current_dir, root_dir)
+        return f"\\{match.group('cmd')}{match.group('opts')}{{{names}}}"
+
+    source = _RESOURCE_PATH_RE.sub(resource_repl, source)
+    source = _BIBLIOGRAPHY_RE.sub(bibliography_repl, source)
+    return _USEPACKAGE_RE.sub(usepackage_repl, source)
+
+
+def flatten_inputs(
+    source: str, base_dir: str, _depth: int = 0, _root_dir: str | None = None
+) -> str:
     """Inline ``\\input``/``\\include`` (and import-package ``\\import``) files."""
     if _depth > 20:
         return source
+    root_dir = os.path.abspath(_root_dir or base_dir)
+    base_dir = os.path.abspath(base_dir)
+    source = relativize_external_paths(source, base_dir, root_dir)
 
     def _inline(path: str) -> str | None:
         if os.path.isfile(path):
             with open(path, encoding="utf-8") as fh:
                 inner = strip_comments(fh.read())
-            return flatten_inputs(inner, os.path.dirname(path) or base_dir, _depth + 1)
+            return flatten_inputs(
+                inner, os.path.dirname(path) or base_dir, _depth + 1, root_dir
+            )
         return None
 
     def repl(match: re.Match[str]) -> str:
