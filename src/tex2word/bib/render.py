@@ -259,6 +259,9 @@ def _walk_cites(blocks: list[ir.Block], out: list[ir.Cite]) -> None:
             inl(block.caption)
             for sub in block.subfigures:
                 inl(sub.caption)
+        elif isinstance(block, ir.Float):
+            inl(block.caption)
+            _walk_cites(block.blocks, out)
         elif isinstance(block, ir.Algorithm):
             inl(block.caption)
             for line in block.lines:

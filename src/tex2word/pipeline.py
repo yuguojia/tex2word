@@ -114,7 +114,7 @@ def convert_source(
     )
     caption_config = CaptionConfig.from_locale(
         caption_locale, doc.meta.language, has_cjk_font=has_cjk_font,
-    ).with_overrides(doc.meta.caption_overrides)
+    ).with_custom_kinds(doc.meta.custom_floats).with_overrides(doc.meta.caption_overrides)
     # In a Chinese document, directly-typed curly quotes (“”‘’) get an East-Asian
     # font hint so Word renders them with the CJK font (full-width quotes); quotes
     # from LaTeX commands stay English. Same "is Chinese" test as the caption locale.

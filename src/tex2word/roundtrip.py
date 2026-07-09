@@ -208,6 +208,8 @@ def _block_signature(block: ir.Block) -> tuple[str, str]:
         # content key would mismatch every unedited figure and drag its neighbour
         # paragraphs into a kept-manifest region. Align figures by position.
         return ("figure", "")
+    if isinstance(block, ir.Float):
+        return (f"float:{block.kind}", _norm(_prose_text(block.caption or [])))
     if isinstance(block, ir.PageBreak):
         return ("pagebreak", block.command)
     return (type(block).__name__, "")
@@ -231,7 +233,7 @@ class KeptManifestBlock:
 def _kept_kind(block: ir.Block) -> str:
     return {
         ir.Paragraph: "paragraph", ir.Heading: "heading", ir.Figure: "figure",
-        ir.Table: "table", ir.MathBlock: "equation",
+        ir.Table: "table", ir.Float: "float", ir.MathBlock: "equation",
     }.get(type(block), type(block).__name__)
 
 
@@ -250,6 +252,8 @@ def _kept_snippet(block: ir.Block) -> str:
                 for b in c.blocks:
                     if isinstance(b, ir.Paragraph) and _prose_text(b.inlines):
                         return _prose_text(b.inlines)[:60]
+    if isinstance(block, ir.Float):
+        return _prose_text(block.caption or [])[:60]
     return ""
 
 

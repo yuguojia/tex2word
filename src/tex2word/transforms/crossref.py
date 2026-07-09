@@ -48,7 +48,7 @@ def _label_name(block: ir.Block) -> str | None:
         return _inline_text(block.inlines)
     if isinstance(block, ir.Theorem):
         return _inline_text(block.title) if block.title else block.kind
-    if isinstance(block, ir.Figure | ir.Table) and block.caption:
+    if isinstance(block, ir.Figure | ir.Table | ir.Float) and block.caption:
         return _inline_text(block.caption)
     return None
 
@@ -58,6 +58,8 @@ def _label_kind(block: ir.Block) -> str:
         return "equation"
     if isinstance(block, ir.Figure):
         return "figure"
+    if isinstance(block, ir.Float):
+        return block.kind
     if isinstance(block, ir.Table):
         return "table"
     if isinstance(block, ir.Heading):
@@ -86,6 +88,8 @@ def _collect(blocks: list[ir.Block], labels: dict[str, ir.LabelInfo]) -> None:
             kind = _label_kind(block)
             if isinstance(block, ir.Theorem):
                 counter_name = block.counter or "Item"
+            elif isinstance(block, ir.Float):
+                counter_name = block.counter
             else:
                 counter_name = _COUNTER.get(kind, "Item")
             labels[label] = ir.LabelInfo(
@@ -117,7 +121,7 @@ def _collect(blocks: list[ir.Block], labels: dict[str, ir.LabelInfo]) -> None:
                         bookmark=sanitize_bookmark(inline.label),
                     )
         # recurse into nested block containers
-        if isinstance(block, ir.Quote | ir.Theorem):
+        if isinstance(block, ir.Quote | ir.Theorem | ir.Float):
             _collect(block.blocks, labels)
         elif isinstance(block, ir.ItemList):
             for item in block.items:
@@ -172,6 +176,10 @@ def _rewrite_refs_blocks(blocks: list[ir.Block], labels, report) -> None:
             _rewrite_refs_inlines(block.caption, labels, report)
         elif isinstance(block, ir.Figure) and block.caption:
             _rewrite_refs_inlines(block.caption, labels, report)
+        elif isinstance(block, ir.Float):
+            if block.caption:
+                _rewrite_refs_inlines(block.caption, labels, report)
+            _rewrite_refs_blocks(block.blocks, labels, report)
 
 
 def resolve_crossrefs(doc: ir.Document, report: ConversionReport) -> ir.Document:

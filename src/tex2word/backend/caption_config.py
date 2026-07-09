@@ -70,6 +70,11 @@ _LABEL_STYLE_KEYS = {
 }
 
 
+def caption_key_prefix(name: str) -> str:
+    """Normalise a float environment name to the \texwordcaption key prefix."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 @dataclass(frozen=True)
 class CaptionConfig:
     """Wording around a caption/cross-reference number.
@@ -93,6 +98,8 @@ class CaptionConfig:
     #: Word character style names for the displayed caption identifier. The ""
     #: entry is the global default, per-kind entries override it.
     label_styles: dict[str, str] = field(default_factory=dict)
+    #: custom float environment name -> canonical caption/SEQ kind.
+    custom_kinds: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def english(cls) -> CaptionConfig:
@@ -151,12 +158,15 @@ class CaptionConfig:
         if not overrides:
             return self
         labels = dict(self.labels)
+        ref_names = dict(self.ref_names)
         seq_names = dict(self.seq_names)
         label_styles = dict(self.label_styles)
+        custom_kinds = dict(self.custom_kinds)
         label_number_sep = self.label_number_sep
         section_sep = self.section_sep
         delim = self.delim
         eq_open, eq_close = self.eq_wrap
+        custom_key_map = self._custom_override_key_map(custom_kinds)
         for key, value in overrides.items():
             if key in _LABEL_KEYS:
                 labels[_LABEL_KEYS[key]] = value
@@ -164,6 +174,14 @@ class CaptionConfig:
                 seq_names[_SEQ_KEYS[key]] = value
             elif key in _LABEL_STYLE_KEYS:
                 label_styles[_LABEL_STYLE_KEYS[key]] = value.strip()
+            elif key in custom_key_map:
+                prop, counter = custom_key_map[key]
+                if prop == "label":
+                    labels[counter] = value
+                elif prop == "seq":
+                    seq_names[counter] = value
+                elif prop == "style":
+                    label_styles[counter] = value.strip()
             elif key == "labelsep":
                 label_number_sep = value
             elif key == "sectionsep":
@@ -174,11 +192,52 @@ class CaptionConfig:
                 eq_open = value
             elif key == "eqclose":
                 eq_close = value
+        ref_names.update(_custom_ref_names(custom_kinds, labels, label_number_sep))
         return replace(
-            self, labels=labels, seq_names=seq_names, label_styles=label_styles,
+            self, labels=labels, ref_names=ref_names, seq_names=seq_names,
+            label_styles=label_styles, custom_kinds=custom_kinds,
             label_number_sep=label_number_sep,
             section_sep=section_sep, delim=delim, eq_wrap=(eq_open, eq_close),
         )
+
+    def with_custom_kinds(self, kinds: dict[str, str]) -> CaptionConfig:
+        """Register custom floating environments from ``\\DeclareFloatingEnvironment``.
+
+        ``kinds`` maps LaTeX environment names to canonical caption kinds. The
+        canonical kind is what captions pass to ``label()`` / ``seq_name()``; the
+        environment name is what cross-reference resolution stores as ``ref_kind``.
+        """
+        if not kinds:
+            return self
+        labels = dict(self.labels)
+        ref_names = dict(self.ref_names)
+        custom_kinds = dict(self.custom_kinds)
+        for env, counter in kinds.items():
+            env_key = env.strip().lower()
+            counter = counter.strip() or env_key.capitalize()
+            if not env_key:
+                continue
+            custom_kinds[env_key] = counter
+            labels.setdefault(counter, counter)
+        ref_names.update(_custom_ref_names(custom_kinds, labels, self.label_number_sep))
+        return replace(
+            self, labels=labels, ref_names=ref_names, custom_kinds=custom_kinds
+        )
+
+    @staticmethod
+    def _custom_override_key_map(
+        custom_kinds: dict[str, str]
+    ) -> dict[str, tuple[str, str]]:
+        out: dict[str, tuple[str, str]] = {}
+        for env, counter in custom_kinds.items():
+            prefix = caption_key_prefix(env)
+            if not prefix:
+                continue
+            out[f"{prefix}label"] = ("label", counter)
+            out[f"{prefix}seq"] = ("seq", counter)
+            out[f"{prefix}labelstyle"] = ("style", counter)
+            out[f"{prefix}identifierstyle"] = ("style", counter)
+        return out
 
     def label(self, counter: str) -> str:
         """Displayed label word for a SEQ ``counter`` (falls back to the name)."""
@@ -196,3 +255,16 @@ class CaptionConfig:
         uses for the counter (and the matching ``\\listoffigures`` ``\\c`` reference,
         kept in lock-step so the list still builds)."""
         return self.seq_names.get(kind, kind)
+
+
+def _custom_ref_names(
+    custom_kinds: dict[str, str],
+    labels: dict[str, str],
+    label_number_sep: str,
+) -> dict[str, tuple[str, str]]:
+    out: dict[str, tuple[str, str]] = {}
+    for env, counter in custom_kinds.items():
+        label = labels.get(counter, counter)
+        prefix = f"{label}{label_number_sep}"
+        out[env] = (prefix, prefix)
+    return out
