@@ -259,6 +259,8 @@ class DocumentWriter:
             self._table(block, body)
         elif isinstance(block, ir.Figure):
             self._figure(block, body)
+        elif isinstance(block, ir.Float):
+            self._float(block, body)
         elif isinstance(block, ir.CodeBlock):
             self._code_block(block, body)
         elif isinstance(block, ir.Quote):
@@ -676,6 +678,22 @@ class DocumentWriter:
         if cap is not None and not block.caption_above:
             content.append(cap)
         body.append(sdt)
+
+    def _float(self, block: ir.Float, body: _Element) -> None:
+        cap = None
+        if block.caption is not None:
+            cap = self._caption(
+                block.counter,
+                block.caption,
+                block.label,
+                numbered=block.caption_numbered,
+            )
+        if cap is not None and block.caption_above:
+            body.append(cap)
+        for inner in block.blocks:
+            self._block(inner, body)
+        if cap is not None and not block.caption_above:
+            body.append(cap)
 
     def _render_tikz(self, block: ir.Figure) -> _Element | None:
         """Compile a figure's TikZ/PGF source to an embedded PNG, or None."""

@@ -231,6 +231,7 @@ _IGNORE_MACROS = {
     "thispagestyle", "setlength", "setcounter", "hypersetup",
     "graphicspath", "definecolor", "pagenumbering",
     "renewcommand", "newcommand", "providecommand",
+    "DeclareFloatingEnvironment",
     "setitemize", "setenumerate", "hyphenation", "settopmatter",
     "texwordstyle",  # tex2word style-binding directive: scanned separately, no output
     "texwordtemplate",  # tex2word reference-template directive: scanned separately
@@ -415,6 +416,8 @@ class _Builder:
         self.theorem_counters: dict[str, str] = {}
         # user \newtcolorbox callout environments -> rendered as Quote blocks
         self.box_envs: set[str] = set()
+        # custom float env name -> caption/SEQ kind from \DeclareFloatingEnvironment
+        self.custom_floats: dict[str, str] = {}
 
     # -- inline ----------------------------------------------------------- #
 
@@ -1251,6 +1254,9 @@ class _Builder:
         if base in ("algorithm", "algorithm2e"):
             out.append(self._algorithm(node))
             return
+        if base in self.custom_floats:
+            out.append(self._custom_float(node, base))
+            return
         if base in _OPAQUE_ENVS:
             # graphics we cannot translate -> placeholder + warning (PRD: TikZ).
             self.report.warn(name, f"{name} kept as a graphics placeholder")
@@ -1307,6 +1313,46 @@ class _Builder:
         alg = ir.Algorithm(lines=lines, caption=caption, label=label)
         self._labelable = alg
         return alg
+
+    def _custom_float(self, node: LatexEnvironmentNode, base: str) -> ir.Float:
+        caption: list[ir.Inline] | None = None
+        caption_numbered = True
+        caption_above = False
+        label: str | None = None
+        align: ir.TableAlign | None = None
+        content: list = []
+        seen_body = False
+        for child in node.nodelist:
+            if isinstance(child, LatexMacroNode) and child.macroname == "caption":
+                caption = self.inlines(_group_nodes(child))
+                caption_numbered = not _has_star(child)
+                caption_above = not seen_body
+            elif isinstance(child, LatexMacroNode) and child.macroname == "label":
+                label = _chars_of(_group_nodes(child))
+            elif (
+                isinstance(child, LatexMacroNode)
+                and child.macroname in _FLOAT_ALIGN_MACROS
+            ):
+                align = _FLOAT_ALIGN_MACROS[child.macroname]
+            else:
+                if not seen_body and _float_body_node_visible(child):
+                    seen_body = True
+                content.append(child)
+        blocks = self.blocks(content)
+        if align is not None:
+            _apply_float_align(blocks, align)
+        flt = ir.Float(
+            kind=base,
+            counter=self.custom_floats.get(base, base.capitalize()),
+            blocks=blocks,
+            caption=caption,
+            label=label,
+            caption_numbered=caption_numbered,
+            caption_above=caption_above,
+            source=node.latex_verbatim(),
+        )
+        self._labelable = flt
+        return flt
 
     def _env_optional_title(self, node: LatexEnvironmentNode) -> list[ir.Inline] | None:
         argd = node.nodeargd
@@ -1681,6 +1727,31 @@ def _walk_macros(nodes: list):
             yield from _walk_macros(n.nodelist)
         elif isinstance(n, LatexEnvironmentNode):
             yield from _walk_macros(n.nodelist)
+
+
+def _float_body_node_visible(node) -> bool:
+    """Whether a custom-float child is body content for caption placement."""
+    if isinstance(node, LatexCommentNode):
+        return False
+    if isinstance(node, LatexCharsNode):
+        return bool(node.chars.strip())
+    if isinstance(node, LatexMacroNode):
+        return (
+            node.macroname not in {"caption", "label", *_FLOAT_ALIGN_MACROS}
+            and node.macroname not in _IGNORE_MACROS
+        )
+    if isinstance(node, LatexGroupNode):
+        return any(_float_body_node_visible(c) for c in node.nodelist)
+    return True
+
+
+def _apply_float_align(blocks: list[ir.Block], align: ir.TableAlign) -> None:
+    """Apply a float-level alignment declaration to block types that support it."""
+    for block in blocks:
+        if isinstance(block, ir.Paragraph) and block.align is None:
+            block.align = align
+        elif isinstance(block, ir.Table) and block.align is None:
+            block.align = align
 
 
 # --------------------------------------------------------------------------- #
@@ -2222,6 +2293,68 @@ def _resolve_theorem_counters(
     return counters
 
 
+_DECLARE_FLOAT_RE = re.compile(r"\\DeclareFloatingEnvironment\b")
+
+
+def _read_balanced_group(
+    source: str, i: int, open_ch: str, close_ch: str
+) -> tuple[str, int] | None:
+    if i >= len(source) or source[i] != open_ch:
+        return None
+    depth = 0
+    escaped = False
+    for j in range(i, len(source)):
+        ch = source[j]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return source[i + 1:j], j + 1
+    return source[i + 1:], len(source)
+
+
+def _collect_declared_floats(source: str) -> dict[str, str]:
+    """Map ``\\DeclareFloatingEnvironment`` declarations to env -> caption kind."""
+    floats: dict[str, str] = {}
+    pos = 0
+    while True:
+        m = _DECLARE_FLOAT_RE.search(source, pos)
+        if m is None:
+            break
+        i = m.end()
+        while i < len(source) and source[i].isspace():
+            i += 1
+        opts = ""
+        if i < len(source) and source[i] == "[":
+            group = _read_balanced_group(source, i, "[", "]")
+            if group is None:
+                pos = i + 1
+                continue
+            opts, i = group
+        while i < len(source) and source[i].isspace():
+            i += 1
+        group = _read_balanced_group(source, i, "{", "}")
+        if group is None:
+            pos = i + 1
+            continue
+        env, pos = group
+        env = env.strip()
+        if not env:
+            continue
+        parsed = _parse_graphics_options(opts)
+        display = _strip_outer_braces(parsed.get("name", "")).strip()
+        display = _normalize_ws(display) if display else env.capitalize()
+        floats[env] = display
+    return floats
+
+
 def _build_context(
     extra_theorem_envs: tuple[str, ...] = (),
     *,
@@ -2258,6 +2391,7 @@ def _build_context(
             # tex2word-only: set a Word character style (one style-name arg; an
             # optional following group is consumed by the builder as content).
             MacroSpec("texwordcharstyle", "{"),
+            MacroSpec("DeclareFloatingEnvironment", "[{"),
             MacroSpec("newcounter", "{["),
             MacroSpec("addtocounter", "{{"),
             MacroSpec("refstepcounter", "{"),
@@ -2648,10 +2782,14 @@ def parse_document(
     # scan those sources too so the theorem environments are recognised.
     theorem_src = expanded + "\n" + local_package_sources(directive_source, base_dir)
     custom_theorems, unnumbered_theorems, shared_counters = _collect_newtheorems(theorem_src)
+    custom_floats = _collect_declared_floats(theorem_src)
     ctx = _build_context(
         tuple(custom_theorems),
         extra_macros=tuple(plugin_registry.macro_specs),
-        extra_environments=tuple(plugin_registry.environment_specs),
+        extra_environments=(
+            *tuple(plugin_registry.environment_specs),
+            *(EnvironmentSpec(name, "[") for name in custom_floats),
+        ),
     )
     walker = LatexWalker(body, latex_context=ctx, tolerant_parsing=True)
     nodes, _, _ = walker.get_latex_nodes()
@@ -2661,6 +2799,7 @@ def parse_document(
     builder.unnumbered_theorems = unnumbered_theorems
     builder.theorem_counters = _resolve_theorem_counters(custom_theorems, shared_counters)
     builder.box_envs = _collect_tcolorbox_envs(theorem_src)  # \newtcolorbox callouts
+    builder.custom_floats.update(custom_floats)
     builder.book_mode = _is_book_class(expanded)
     _collect_color_defs(expanded, builder.colors)  # \definecolor/\colorlet (preamble + body)
     _collect_acronyms(expanded, builder.acronyms)   # \newacronym (preamble + body)
@@ -2671,6 +2810,7 @@ def parse_document(
     builder.noindent_style = _detect_noindent_style(directive_source)
     blocks = builder.blocks(nodes)
     doc = ir.Document(blocks=blocks, meta=builder.meta, book=builder.book_mode)
+    doc.meta.custom_floats.update(custom_floats)
 
     _fill_meta_from_preamble(doc, preamble, ctx, report)
     _collect_bib_resources(preamble, builder)  # biblatex \addbibresource (preamble)
@@ -2839,10 +2979,30 @@ def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
     ``\\texwordcaption{delim}{ - }`` keeps the surrounding spaces. Unknown keys
     are ignored.
     """
+    custom_keys = _custom_caption_override_keys(doc.meta.custom_floats)
     for m in _CAPTION_OVERRIDE_RE.finditer(source):
         key = m.group(1).strip().lower()
-        if key in _CAPTION_OVERRIDE_KEYS:
+        if key in _CAPTION_OVERRIDE_KEYS or key in custom_keys:
             doc.meta.caption_overrides[key] = m.group(2)
+
+
+def _caption_key_prefix(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _custom_caption_override_keys(custom_floats: dict[str, str]) -> set[str]:
+    keys: set[str] = set()
+    for env in custom_floats:
+        prefix = _caption_key_prefix(env)
+        if not prefix:
+            continue
+        keys.update({
+            f"{prefix}label",
+            f"{prefix}seq",
+            f"{prefix}labelstyle",
+            f"{prefix}identifierstyle",
+        })
+    return keys
 
 
 def _detect_template(doc: ir.Document, source: str) -> None:

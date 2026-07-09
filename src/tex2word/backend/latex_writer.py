@@ -127,6 +127,13 @@ class LatexWriter:
             lines.append("\\usepackage{multirow}")
         if feat.algorithm:
             lines += ["\\usepackage{algorithm}", "\\usepackage{algpseudocode}"]
+        if feat.custom_floats:
+            lines.append("\\usepackage{newfloat}")
+            for env, display in sorted(feat.custom_floats.items()):
+                lines.append(
+                    f"\\DeclareFloatingEnvironment[name={{{latex_escape(display)}}}]"
+                    f"{{{env}}}"
+                )
         if feat.links or feat.refs:
             lines.append("\\usepackage{hyperref}")
         if feat.cleveref:
@@ -195,6 +202,8 @@ class LatexWriter:
             return self._table(block)
         if isinstance(block, ir.Figure):
             return block.source or self._figure(block)
+        if isinstance(block, ir.Float):
+            return block.source or self._float(block)
         if isinstance(block, ir.CodeBlock):
             return f"\\begin{{verbatim}}\n{block.text}\n\\end{{verbatim}}"
         if isinstance(block, ir.Quote):
@@ -314,6 +323,22 @@ class LatexWriter:
             lines.extend(cap_lines)
         lines.append("\\end{figure}")
         return "\n".join(lines)
+
+    def _float(self, block: ir.Float) -> str:
+        lines = [f"\\begin{{{block.kind}}}"]
+        cap_lines: list[str] = []
+        if block.caption:
+            star = "" if block.caption_numbered else "*"
+            cap_lines.append(f"\\caption{star}{{{self._inlines(block.caption)}}}")
+        if block.label:
+            cap_lines.append(f"\\label{{{block.label}}}")
+        if block.caption_above:
+            lines.extend(cap_lines)
+        lines.append(self._blocks(block.blocks))
+        if not block.caption_above:
+            lines.extend(cap_lines)
+        lines.append(f"\\end{{{block.kind}}}")
+        return "\n".join(line for line in lines if line)
 
     def _theorem(self, block: ir.Theorem) -> str:
         env = "proof" if block.kind == "Proof" else block.kind.lower()
@@ -436,6 +461,7 @@ class _Features:
         self.multirow = self.algorithm = self.links = self.refs = False
         self.cleveref = self.cites = self.index = False
         self.theorem_kinds: dict[str, str] = {}
+        self.custom_floats: dict[str, str] = {}
 
 
 def _scan(blocks: list[ir.Block], feat: _Features) -> None:  # noqa: C901
@@ -446,6 +472,10 @@ def _scan(blocks: list[ir.Block], feat: _Features) -> None:  # noqa: C901
             feat.graphics = True
             if block.subfigures:
                 feat.subfig = True
+        elif isinstance(block, ir.Float):
+            feat.custom_floats[block.kind] = block.counter
+            _scan(block.blocks, feat)
+            _scan_inlines(block.caption or [], feat)
         elif isinstance(block, ir.Table):
             feat.booktabs = feat.booktabs or block.booktabs
             if any(c.rowspan > 1 for r in block.rows for c in r.cells):

@@ -48,10 +48,9 @@ EmphasisKind = Literal[
     "subscript", "strike", "highlight",
 ]
 CiteMode = Literal["paren", "text", "foot", "author", "year", "num"]
-RefKind = Literal[
-    "generic", "equation", "figure", "table", "section", "theorem", "page", "name",
-    "listitem",
-]
+# Built-in reference kinds use the values below; custom floating environments add
+# their environment name (for example "scheme") at parse time.
+RefKind = str
 
 
 @dataclass
@@ -331,6 +330,25 @@ class Figure(Node):
 
 
 @dataclass
+class Float(Node):
+    """A custom float declared with ``\\DeclareFloatingEnvironment``.
+
+    ``kind`` is the LaTeX environment name (e.g. ``scheme``), while ``counter`` is
+    the Word SEQ/caption kind (e.g. ``Scheme``). The body is deliberately generic:
+    custom floats can wrap graphics, tables, prose, math, or a mix of blocks.
+    """
+
+    kind: str
+    counter: str
+    blocks: list[Block]
+    caption: list[Inline] | None = None
+    label: str | None = None
+    caption_numbered: bool = True
+    caption_above: bool = False
+    source: str = ""
+
+
+@dataclass
 class CodeBlock(Node):
     text: str
     lang: str | None = None
@@ -423,6 +441,7 @@ Block = (
     | ItemList
     | Table
     | Figure
+    | Float
     | CodeBlock
     | Quote
     | Theorem
@@ -462,6 +481,9 @@ class DocumentMeta(Node):
     # \texwordcaption{key}{value}: override caption/cross-ref wording (label word,
     # separators, delimiter, equation parens) -- see backend.caption_config.
     caption_overrides: dict[str, str] = field(default_factory=dict)
+    # Custom floats declared via \DeclareFloatingEnvironment: environment name ->
+    # displayed counter/caption kind (e.g. "scheme" -> "Scheme").
+    custom_floats: dict[str, str] = field(default_factory=dict)
     # \texwordtemplate{path.docx}: in-source Word reference template, resolved
     # relative to the .tex file. The CLI --reference-doc option takes priority.
     template_doc: str | None = None
