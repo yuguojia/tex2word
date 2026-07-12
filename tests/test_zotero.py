@@ -14,6 +14,36 @@ BIB = r"""
 @book{k1984, author={Knuth, Donald E.}, title={The TeXbook}, year={1984}}
 """
 
+PREPRINT_BIB = r"""
+@online{wangWellposedModelsMemristive2016,
+  type = {xyzabc},
+  title = {Well-Posed Models of Memristive Devices},
+  author = {Wang, Tianshi and Roychowdhury, Jaijeet},
+  date = {2016-05-15},
+  eprint = {1605.04897},
+  eprinttype = {arXiv},
+  eprintclass = {cs},
+  doi = {10.48550/arXiv.1605.04897},
+  url = {http://arxiv.org/abs/1605.04897},
+  urldate = {2025-12-12},
+  abstract = {An abstract.},
+  langid = {english},
+  pubstate = {prepublished},
+  annotation = {titleTranslation: 忆阻器件的适定模型}
+}
+"""
+
+THESIS_BIB = r"""
+@thesis{doeGenericThesis2024,
+  author = {Doe, Jane},
+  title = {A Generic BibLaTeX Thesis},
+  type = {PhD thesis},
+  institution = {Example University},
+  location = {Taipei},
+  date = {2024-06-15}
+}
+"""
+
 
 def _convert(body: str, tmp_path, mode: str):
     (tmp_path / "z.bib").write_text(BIB, encoding="utf-8")
@@ -105,3 +135,64 @@ def test_zotero_output_valid(tmp_path):
 
     result = _convert(r"\citep[see][p.~5]{e1905} and \citet{k1984}.", tmp_path, "zotero")
     assert validate_docx(result.docx) == []
+
+
+def test_zotero_online_preprint_item_data(tmp_path):
+    (tmp_path / "preprint.bib").write_text(PREPRINT_BIB, encoding="utf-8")
+    tex = tmp_path / "preprint.tex"
+    tex.write_text(
+        r"\begin{document}\cite{wangWellposedModelsMemristive2016}"
+        r"\bibliography{preprint}\end{document}",
+        encoding="utf-8",
+    )
+    _, result = convert_file(str(tex), citation_mode="zotero")
+    cit = next(i for i in _instrs(result.docx) if "ZOTERO_ITEM" in i)
+    data = json.loads(cit.split("CSL_CITATION ", 1)[1])["citationItems"][0]["itemData"]
+
+    assert data["type"] == "article"
+    assert data["genre"] == "xyzabc"
+    assert data["citation-key"] == "wangWellposedModelsMemristive2016"
+    assert data["number"] == "arXiv:1605.04897"
+    assert data["publisher"] == "arXiv"
+    assert data["source"] == "arXiv.org"
+    assert data["language"] == "en"
+    assert data["issued"] == {"date-parts": [[2016, 5, 15]]}
+    assert data["accessed"] == {"date-parts": [[2025, 12, 12]]}
+    assert data["note"] == (
+        "titleTranslation: 忆阻器件的适定模型\narXiv:1605.04897 [cs]"
+    )
+
+
+def test_zotero_online_preprint_without_biblatex_type_omits_genre(tmp_path):
+    bib = PREPRINT_BIB.replace("  type = {xyzabc},\n", "")
+    (tmp_path / "preprint.bib").write_text(bib, encoding="utf-8")
+    tex = tmp_path / "preprint.tex"
+    tex.write_text(
+        r"\begin{document}\cite{wangWellposedModelsMemristive2016}"
+        r"\bibliography{preprint}\end{document}",
+        encoding="utf-8",
+    )
+    _, result = convert_file(str(tex), citation_mode="zotero")
+    cit = next(i for i in _instrs(result.docx) if "ZOTERO_ITEM" in i)
+    data = json.loads(cit.split("CSL_CITATION ", 1)[1])["citationItems"][0]["itemData"]
+
+    assert "genre" not in data
+
+
+def test_zotero_biblatex_thesis_item_data(tmp_path):
+    (tmp_path / "thesis.bib").write_text(THESIS_BIB, encoding="utf-8")
+    tex = tmp_path / "thesis.tex"
+    tex.write_text(
+        r"\begin{document}\cite{doeGenericThesis2024}"
+        r"\bibliography{thesis}\end{document}",
+        encoding="utf-8",
+    )
+    _, result = convert_file(str(tex), citation_mode="zotero")
+    cit = next(i for i in _instrs(result.docx) if "ZOTERO_ITEM" in i)
+    data = json.loads(cit.split("CSL_CITATION ", 1)[1])["citationItems"][0]["itemData"]
+
+    assert data["type"] == "thesis"
+    assert data["genre"] == "PhD thesis"
+    assert data["publisher"] == "Example University"
+    assert data["publisher-place"] == "Taipei"
+    assert data["issued"] == {"date-parts": [[2024, 6, 15]]}

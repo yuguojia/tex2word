@@ -27,6 +27,7 @@ _TYPE_MAP = {
     "proceedings": "book",
     "phdthesis": "thesis",
     "mastersthesis": "thesis",
+    "thesis": "thesis",  # biblatex generic thesis entry
     "techreport": "report",
     "manual": "book",
     "misc": "document",
@@ -57,6 +58,7 @@ _FIELD_MAP = {
     "note": "note",
     "abstract": "abstract",
     "address": "publisher-place",
+    "location": "publisher-place",  # biblatex
     "isbn": "ISBN",
     "issn": "ISSN",
     "chapter": "chapter-number",
@@ -138,7 +140,8 @@ def _tokenize_entry_body(body: str) -> dict[str, str]:
 
 
 def _to_csl(entry_type: str, key: str, raw_fields: dict[str, str]) -> ir.CSLItem:
-    csl_type = _TYPE_MAP.get(entry_type, "document")
+    is_preprint = _is_online_preprint(entry_type, raw_fields)
+    csl_type = "article" if is_preprint else _TYPE_MAP.get(entry_type, "document")
     out: dict[str, object] = {}
     for name, value in raw_fields.items():
         if name == "author":
@@ -151,13 +154,94 @@ def _to_csl(entry_type: str, key: str, raw_fields: dict[str, str]) -> ir.CSLItem
         elif name == "month":
             continue
         elif name == "date":
-            year = re.match(r"\s*(\d{4})", value)
-            if year:
-                out["issued"] = {"date-parts": [[int(year.group(1))]]}
+            parts = _date_parts(value)
+            if parts:
+                out["issued"] = {"date-parts": [parts]}
+        elif name == "urldate":
+            parts = _date_parts(value)
+            if parts:
+                out["accessed"] = {"date-parts": [parts]}
+        elif name in ("langid", "language"):
+            language = _language_code(value)
+            if language:
+                out["language"] = language
+        elif name == "type" and csl_type == "thesis":
+            genre = _strip_braces(value)
+            if genre:
+                out["genre"] = genre
         elif name in _FIELD_MAP:
             out[_FIELD_MAP[name]] = _strip_braces(value)
-    _apply_eprint(out, raw_fields)
+    if is_preprint:
+        _apply_online_preprint(out, key, raw_fields)
+    else:
+        _apply_eprint(out, raw_fields)
     return ir.CSLItem(id=key, type=csl_type, csl_fields=out)
+
+
+def _is_online_preprint(entry_type: str, raw_fields: dict[str, str]) -> bool:
+    """Recognise Zotero/BibLaTeX preprints without retyping every online item."""
+    pubstate = _strip_braces(raw_fields.get("pubstate", "")).strip().lower()
+    return entry_type == "online" and pubstate == "prepublished"
+
+
+def _date_parts(value: str) -> list[int]:
+    """Turn a BibLaTeX ISO date (possibly year-only) into CSL date parts."""
+    match = re.match(r"\s*(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", _strip_braces(value))
+    if not match:
+        return []
+    return [int(part) for part in match.groups() if part is not None]
+
+
+def _language_code(value: str) -> str:
+    language = _strip_braces(value).strip().lower()
+    aliases = {
+        "english": "en",
+        "american": "en-US",
+        "british": "en-GB",
+        "chinese": "zh",
+        "simplifiedchinese": "zh-CN",
+        "traditionalchinese": "zh-TW",
+    }
+    return aliases.get(language, language)
+
+
+def _apply_online_preprint(
+    out: dict[str, object], key: str, raw_fields: dict[str, str]
+) -> None:
+    """Add the CSL/Zotero metadata used for a BibLaTeX online preprint."""
+    out["citation-key"] = key
+
+    genre = _strip_braces(raw_fields.get("type", "")).strip()
+    if genre:
+        out["genre"] = genre
+
+    eprint = _strip_braces(raw_fields.get("eprint", "")).strip()
+    prefix = _strip_braces(
+        raw_fields.get("archiveprefix") or raw_fields.get("eprinttype") or ""
+    ).strip()
+    is_arxiv = bool(eprint) and prefix.lower() in ("", "arxiv")
+    if is_arxiv:
+        out["number"] = f"arXiv:{eprint}"
+        out["publisher"] = "arXiv"
+        out["source"] = "arXiv.org"
+        if "URL" not in out and "DOI" not in out:
+            out["URL"] = f"https://arxiv.org/abs/{eprint}"
+
+    notes: list[str] = []
+    annotation = _strip_braces(raw_fields.get("annotation", "")).strip()
+    if annotation:
+        notes.append(annotation)
+    if eprint:
+        label = f"arXiv:{eprint}" if is_arxiv else eprint
+        eprint_class = _strip_braces(
+            raw_fields.get("eprintclass") or raw_fields.get("primaryclass") or ""
+        ).strip()
+        if eprint_class:
+            label += f" [{eprint_class}]"
+        notes.append(label)
+    if notes:
+        existing = str(out.get("note", "")).strip()
+        out["note"] = "\n".join(([existing] if existing else []) + notes)
 
 
 def _apply_eprint(out: dict[str, object], raw_fields: dict[str, str]) -> None:

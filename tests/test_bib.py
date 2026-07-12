@@ -20,6 +20,26 @@ BIB = r"""
 }
 """
 
+THESES = r"""
+@thesis{generic2024,
+  author = {Doe, Jane},
+  title = {A Generic BibLaTeX Thesis},
+  type = {PhD thesis},
+  institution = {Example University},
+  location = {Taipei},
+  date = {2024-06-15}
+}
+@thesis{untyped2023,
+  author = {Roe, Richard}, title = {An Untyped Thesis}, year = {2023}
+}
+@phdthesis{legacyphd,
+  author = {Smith, Alice}, title = {A Legacy PhD Thesis}, year = {2022}
+}
+@mastersthesis{legacyma,
+  author = {Jones, Bob}, title = {A Legacy Master's Thesis}, year = {2021}
+}
+"""
+
 
 def test_parse_bibtex_fields():
     items = parse_bibtex(BIB)
@@ -29,6 +49,27 @@ def test_parse_bibtex_fields():
     assert e.csl_fields["container-title"] == "Annalen der Physik"
     assert e.csl_fields["author"][0]["family"] == "Einstein"
     assert e.csl_fields["issued"]["date-parts"] == [[1905]]
+
+
+def test_biblatex_thesis_type_and_fields():
+    thesis = parse_bibtex(THESES)["generic2024"]
+    assert thesis.type == "thesis"
+    assert thesis.csl_fields["genre"] == "PhD thesis"
+    assert thesis.csl_fields["publisher"] == "Example University"
+    assert thesis.csl_fields["publisher-place"] == "Taipei"
+    assert thesis.csl_fields["issued"] == {"date-parts": [[2024, 6, 15]]}
+
+
+def test_biblatex_thesis_without_type_omits_genre():
+    thesis = parse_bibtex(THESES)["untyped2023"]
+    assert thesis.type == "thesis"
+    assert "genre" not in thesis.csl_fields
+
+
+def test_legacy_thesis_entry_types_still_map_to_thesis():
+    items = parse_bibtex(THESES)
+    assert items["legacyphd"].type == "thesis"
+    assert items["legacyma"].type == "thesis"
 
 
 def test_accent_decoding():
