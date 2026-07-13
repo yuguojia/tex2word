@@ -11,6 +11,15 @@ from tex2word.report import ConversionReport, aggregate_html
 # -- T14: coverage dashboard ------------------------------------------------- #
 
 
+def test_warning_is_printed_to_console(capsys):
+    report = ConversionReport()
+    report.warn("\\foo", "x")
+    captured = capsys.readouterr()
+    assert "warning [\\foo]: x" in captured.err
+    assert report.warnings[0].construct == "\\foo"
+    assert report.warnings[0].message == "x"
+
+
 def test_aggregate_html_summarises_corpus():
     r1 = ConversionReport(math_omml=3, math_raw=1)
     r1.warn("\\foo", "x")
