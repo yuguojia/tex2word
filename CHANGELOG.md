@@ -66,7 +66,10 @@ those documents surfaced.
   `\texwordstyle{subsection*}{...}`, `\texwordstyle{chapter*}{...}`) or by
   level (`\texwordstyle{heading1*}{...}` .. `heading5*`). Command names follow
   the document class level mapping, so `section*` is level 1 in `article` and
-  level 2 in `book`/`report`.
+  level 2 in `book`/`report`. Bibliography headings declared through biblatex's
+  `\defbibheading` now preserve the embedded sectioning command too, so a
+  `\section*` reference heading uses the corresponding starred-heading binding
+  instead of being forced back to numbered `Heading1`.
 - **Keep the Word template's content (`\texwordtemplate[keep]{...}`).** A new
   optional argument on the in-source template directive switches from the default
   *styling-only* adoption (a fresh document built onto the template's styles, theme

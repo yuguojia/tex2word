@@ -770,6 +770,32 @@ def test_starred_heading_level_role_applies_to_subsection(tmp_path):
     assert 'w:pStyle w:val="Heading2"' in doc
 
 
+def test_bibliography_defbibheading_uses_starred_heading_style(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    (tmp_path / "refs.bib").write_text(
+        "@article{x, author={A, A.}, title={T}, year={2026}}\n",
+        encoding="utf-8",
+    )
+    src = (
+        r"\documentclass{article}"
+        r"\usepackage{biblatex}\addbibresource{refs.bib}"
+        r"\texwordstyle{heading1*}{部分标题}"
+        r"\defbibheading{bibliography}[References]{\section*{#1}}"
+        r"\begin{document}\cite{x}\printbibliography\end{document}"
+    )
+    root = etree.fromstring(_part(convert_source(
+        src, base_dir=str(tmp_path), reference_doc=str(ref)
+    ).docx, "word/document.xml"))
+    references = next(
+        p for p in root.findall(f".//{{{_W}}}p")
+        if "".join(t.text or "" for t in p.iter(f"{{{_W}}}t")) == "References"
+    )
+    style = references.find(f"{{{_W}}}pPr/{{{_W}}}pStyle")
+    assert style is not None and style.get(f"{{{_W}}}val") == "pt"
+    assert references.find(f"{{{_W}}}pPr/{{{_W}}}numPr") is None
+
+
 def test_book_starred_section_role_uses_book_level(tmp_path):
     ref = tmp_path / "template.docx"
     ref.write_bytes(_reference_docx())

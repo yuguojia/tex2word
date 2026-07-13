@@ -87,6 +87,34 @@ def test_defbibheading_default_bibliography_heading(tmp_path):
     assert "References" not in txt
 
 
+def test_defbibheading_preserves_starred_section_semantics(tmp_path):
+    _, res = _convert(
+        tmp_path,
+        body=r"Text \cite{e1905}.\printbibliography",
+        preamble=(
+            r"\usepackage{biblatex}\addbibresource{refs.bib}"
+            r"\defbibheading{bibliography}[References]{\section*{#1}}"
+        ),
+    )
+    bib = next(b for b in res.document.blocks if isinstance(b, ir.Bibliography))
+    assert bib.heading_level == 1
+    assert bib.heading_numbered is False
+
+
+def test_defbibheading_uses_book_section_level(tmp_path):
+    (tmp_path / "refs.bib").write_text(_BIB, encoding="utf-8")
+    (tmp_path / "p.tex").write_text(
+        r"\documentclass{book}\usepackage{biblatex}\addbibresource{refs.bib}"
+        r"\defbibheading{bibliography}[References]{\section*{#1}}"
+        r"\begin{document}\cite{e1905}\printbibliography\end{document}",
+        encoding="utf-8",
+    )
+    _, res = convert_file(str(tmp_path / "p.tex"), embed_manifest=False)
+    bib = next(b for b in res.document.blocks if isinstance(b, ir.Bibliography))
+    assert bib.heading_level == 2
+    assert bib.heading_numbered is False
+
+
 def test_printbibliography_heading_and_title_option(tmp_path):
     _, res = _convert(
         tmp_path,

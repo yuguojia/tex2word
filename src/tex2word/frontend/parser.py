@@ -973,11 +973,14 @@ class _Builder:
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname == "printbibliography":
                 flush()
+                title, heading_level, heading_numbered = self._printbibliography_heading(node)
                 out.append(
                     ir.Bibliography(
                         entries=[],
                         style="numeric",
-                        title=self._printbibliography_title(node),
+                        title=title,
+                        heading_level=heading_level,
+                        heading_numbered=heading_numbered,
                     )
                 )
                 continue
@@ -1128,7 +1131,10 @@ class _Builder:
                 break
         self.bib_headings[name] = (default_title, _latex_of(groups[1].nodelist).strip())
 
-    def _printbibliography_title(self, node: LatexMacroNode) -> list[ir.Inline] | None:
+    def _printbibliography_heading(
+        self, node: LatexMacroNode
+    ) -> tuple[list[ir.Inline] | None, int, bool]:
+        """Return visible text, document level and numbering for a biblatex heading."""
         opts = _parse_printbibliography_options(node)
         heading = opts.get("heading", "bibliography").strip() or "bibliography"
         title = opts.get("title")
@@ -1139,24 +1145,36 @@ class _Builder:
             default_title, template = self.bib_headings[heading]
             arg = title if title is not None else default_title
             rendered = template.replace("#1", arg or "")
-            return self._bib_heading_inlines(rendered)
+            return self._parse_bib_heading(rendered)
         if title is not None:
-            return self._bib_heading_inlines(title)
-        return None
+            inlines, level, numbered = self._parse_bib_heading(title)
+            return inlines, level, numbered
+        return None, 1, False
 
-    def _bib_heading_inlines(self, latex: str) -> list[ir.Inline] | None:
+    def _parse_bib_heading(
+        self, latex: str
+    ) -> tuple[list[ir.Inline] | None, int, bool]:
+        r"""Parse the sectioning command embedded in a ``\defbibheading`` body."""
         if not latex.strip():
-            return None
+            return None, 1, False
         try:
             nodes, _, _ = LatexWalker(
                 latex, latex_context=self.latex_context, tolerant_parsing=True
             ).get_latex_nodes()
         except Exception:
-            return [ir.Text(_normalize_ws(latex))]
+            return [ir.Text(_normalize_ws(latex))], 1, False
+        levels = _SECTION_LEVELS_BOOK if self.book_mode else _SECTION_LEVELS
         for n in nodes:
             if isinstance(n, LatexMacroNode) and n.macroname.rstrip("*") in _SECTION_LEVELS:
-                return _clean_inlines(self.inlines(_group_nodes(n)), trim=True)
-        return _clean_inlines(self.inlines(nodes), trim=True)
+                name = n.macroname.rstrip("*")
+                is_part = name == "part"
+                numbered = not _has_star(n) and (name in _NUMBERED_SECTIONS or is_part)
+                return (
+                    _clean_inlines(self.inlines(_group_nodes(n)), trim=True),
+                    levels.get(name, 1),
+                    numbered,
+                )
+        return _clean_inlines(self.inlines(nodes), trim=True), 1, False
 
     def _heading(self, node: LatexMacroNode, out: list[ir.Block]) -> None:
         name = node.macroname.rstrip("*")

@@ -426,6 +426,11 @@ class Bibliography(Node):
     entries: list[CSLItem]
     style: str = "numeric"
     title: list[Inline] | None = None
+    # Sectioning semantics from biblatex's \defbibheading template.  Keeping
+    # these separate from ``title`` lets the Word backend apply the same
+    # starred-heading style mapping as a literal \section* / \chapter*.
+    heading_level: int = 1
+    heading_numbered: bool = False
 
 
 @dataclass

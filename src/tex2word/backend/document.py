@@ -1032,7 +1032,17 @@ class DocumentWriter:
         sdtpr = sub(sdt, "w:sdtPr")
         sub(sdtpr, "w:tag", **{"w:val": BIB_SDT_TAG})
         content = sub(sdt, "w:sdtContent")
-        heading = self._styled_paragraph("Heading1")
+        level = min(max(block.heading_level, 1), 5)
+        heading_style = _HEADING_STYLE.get(level, "Heading5")
+        if not block.heading_numbered:
+            heading_style = self.star_heading_style_ids[level - 1] or heading_style
+        heading = self._styled_paragraph(heading_style)
+        if block.heading_numbered and not self.style_numbering and level <= 4:
+            ppr = heading.find(_qn("w:pPr"))
+            assert ppr is not None
+            numpr = sub(ppr, "w:numPr")
+            sub(numpr, "w:ilvl", **{"w:val": str(level - 1)})
+            sub(numpr, "w:numId", **{"w:val": str(self._num_ids.heading)})
         self._inlines(block.title or [ir.Text("References")], heading)
         content.append(heading)
         zotero = self.citation_mode == "zotero"
