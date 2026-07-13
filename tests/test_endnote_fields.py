@@ -76,6 +76,68 @@ def test_endnote_multi_cite_contains_each_record(tmp_path):
     assert "<label>knuth1984</label>" in instr
 
 
+def test_endnote_text_cites_set_author_year_on_every_record(tmp_path):
+    result = _convert(
+        r"\citet{cho2015}; \textcite{cho2015,knuth1984}.", tmp_path,
+    )
+    instrs = _endnote_instrs(result.docx)
+    assert len(instrs) == 2
+    assert instrs[0].count('<Cite AuthorYear="1">') == 1
+    assert instrs[1].count('<Cite AuthorYear="1">') == 2
+
+
+def test_endnote_author_year_cite_reads_back_as_text_mode(tmp_path):
+    result = _convert(r"\textcite{knuth1984}.", tmp_path, manifest=False)
+    doc = read_docx(result.docx)
+    cite = next(
+        inline
+        for block in doc.blocks if isinstance(block, ir.Paragraph)
+        for inline in block.inlines if isinstance(inline, ir.Cite)
+    )
+    assert cite.keys == ["knuth1984"]
+    assert cite.mode == "text"
+
+
+def test_endnote_nocite_emits_hidden_cite_at_command_position(tmp_path):
+    result = _convert(r"Before\nocite{knuth1984}After", tmp_path)
+    root = document_root(result.docx)
+    paragraph = next(
+        p for p in root.xpath("//w:p", namespaces=NS)
+        if "Before" in "".join(p.itertext())
+    )
+    sequence = [
+        element.text or ""
+        for element in paragraph.iter()
+        if element.tag.split("}", 1)[-1] in ("t", "instrText")
+    ]
+    hidden = next(text for text in sequence if "EN.CITE" in text)
+    assert sequence.index("Before") < sequence.index(hidden) < sequence.index("After")
+    assert hidden.count('<Cite Hidden="1">') == 1
+    assert "<label>knuth1984</label>" in hidden
+
+
+def test_endnote_nocite_star_hides_every_bibliography_record(tmp_path):
+    result = _convert(r"\nocite{*}", tmp_path)
+    instrs = _endnote_instrs(result.docx)
+    assert len(instrs) == 1
+    instr = instrs[0]
+    assert instr.count('<Cite Hidden="1">') == 2
+    assert "<label>cho2015</label>" in instr
+    assert "<label>knuth1984</label>" in instr
+
+
+def test_endnote_hidden_cite_reads_back_as_nocite(tmp_path):
+    result = _convert(r"\nocite{knuth1984}", tmp_path, manifest=False)
+    doc = read_docx(result.docx)
+    cite = next(
+        inline
+        for block in doc.blocks if isinstance(block, ir.Paragraph)
+        for inline in block.inlines if isinstance(inline, ir.Cite)
+    )
+    assert cite.keys == ["knuth1984"]
+    assert cite.hidden is True
+
+
 def test_endnote_reference_list_uses_en_reflist_field(tmp_path):
     result = _convert(r"\citep{cho2015} and \citep{knuth1984}.", tmp_path)
     assert _instrs(result.docx).count(" ADDIN EN.REFLIST ") == 1

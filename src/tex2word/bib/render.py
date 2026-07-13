@@ -279,8 +279,9 @@ def resolve_citations(
 ) -> Bibliography:
     """Resolve cites, fill ``Cite.rendered``, and populate the Bibliography block."""
     style = style_family(bibstyle)
-    cites: list[ir.Cite] = []
-    _walk_cites(doc.blocks, cites)
+    all_cites: list[ir.Cite] = []
+    _walk_cites(doc.blocks, all_cites)
+    cites = [cite for cite in all_cites if not cite.hidden]
 
     cited_order: list[str] = []
     for cite in cites:
@@ -291,7 +292,8 @@ def resolve_citations(
                 report.warn("\\cite", f"unknown citation key '{key}'")
     # \nocite{key} / \nocite{*}: include in the reference list, no in-text cite
     extra_keys: list[str] = []
-    for key in nocite_keys or []:
+    hidden_keys = [key for cite in all_cites if cite.hidden for key in cite.keys]
+    for key in [*(nocite_keys or []), *hidden_keys]:
         targets = list(items) if key == "*" else [key]
         for k in targets:
             if k in items and k not in cited_order:

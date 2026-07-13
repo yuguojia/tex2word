@@ -441,6 +441,8 @@ class LatexWriter:
         return f"\\ref{{{node.key}}}"
 
     def _cite(self, node: ir.Cite) -> str:
+        if node.hidden:
+            return f"\\nocite{{{','.join(node.keys)}}}"
         cmd = _CITE_CMD.get(node.mode, "cite")
         opts = ""
         if node.prefix:

@@ -188,9 +188,20 @@ def _record(key: str, item: ir.CSLItem) -> _Element:
     return record
 
 
-def _cite_element(key: str, item: ir.CSLItem, display_text: str) -> _Element:
+def _cite_element(
+    key: str,
+    item: ir.CSLItem,
+    display_text: str,
+    *,
+    hidden: bool = False,
+    author_year: bool = False,
+) -> _Element:
     rec_num = _record_number(key)
     cite = etree.Element("Cite")
+    if hidden:
+        cite.set("Hidden", "1")
+    if author_year:
+        cite.set("AuthorYear", "1")
     _child(cite, "Author", _first_author(item))
     _child(cite, "Year", _year(item))
     _child(cite, "RecNum", rec_num)
@@ -204,7 +215,8 @@ def citation_field(
 ) -> list[_Element]:
     """Build one self-contained ``ADDIN EN.CITE`` complex Word field."""
     root = etree.Element("EndNote")
-    available = [(key, items[key]) for key in cite.keys if key in items]
+    keys = list(items) if "*" in cite.keys else cite.keys
+    available = [(key, items[key]) for key in keys if key in items]
     for key, item in available:
         # For a single record this exactly matches the cached Word result.  In a
         # multi-record field EndNote regenerates the group from the embedded
@@ -213,7 +225,15 @@ def citation_field(
         display = rendered if len(available) == 1 else " ".join(
             part for part in (_first_author(item), _year(item)) if part
         )
-        root.append(_cite_element(key, item, display))
+        root.append(
+            _cite_element(
+                key,
+                item,
+                display,
+                hidden=cite.hidden,
+                author_year=cite.mode == "text",
+            )
+        )
     payload = etree.tostring(root, encoding="unicode", with_tail=False)
     return fields.field(f" ADDIN EN.CITE {payload}", rendered or " ")
 
