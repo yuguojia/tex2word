@@ -9,6 +9,7 @@ for that information.
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Literal
@@ -33,6 +34,7 @@ class ConversionReport:
 
     def warn(self, construct: str, message: str) -> None:
         self.entries.append(ReportEntry("warning", construct, message))
+        print(f"warning [{construct}]: {message}", file=sys.stderr)
 
     def error(self, construct: str, message: str) -> None:
         self.entries.append(ReportEntry("error", construct, message))
