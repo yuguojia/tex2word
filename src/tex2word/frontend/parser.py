@@ -527,6 +527,16 @@ class _Builder:
 
     def _inline_macro(self, node: LatexMacroNode, out: list[ir.Inline]) -> None:  # noqa: C901
         name = node.macroname
+        if name == "nocite":
+            keys = [
+                key.strip()
+                for key in _chars_of(_group_nodes(node)).split(",")
+                if key.strip()
+            ]
+            self.nocite_keys.extend(keys)
+            if keys:
+                out.append(ir.Cite(keys, hidden=True))
+            return
         if name in _FONT_RESET:  # \textrm/\textnormal/... -> upright passthrough
             out.extend(self.inlines(_group_nodes(node)))
             return
@@ -952,9 +962,7 @@ class _Builder:
                 self.bibstyle_set = True
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname == "nocite":
-                for key in _chars_of(_group_nodes(node)).split(","):
-                    if key.strip():
-                        self.nocite_keys.append(key.strip())
+                self._inline_macro(node, inline_buf)
                 continue
             if isinstance(node, LatexMacroNode) and node.macroname == "bibliography":
                 flush()

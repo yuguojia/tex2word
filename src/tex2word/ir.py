@@ -111,6 +111,10 @@ class Cite(Node):
     suffix: str | None = None
     #: formatted in-text marker, filled by the citation pass (Sprint 5).
     rendered: str | None = None
+    #: ``\\nocite`` is represented as a citation that contributes bibliography
+    #: records but has no visible result.  The EndNote backend emits it as an
+    #: ``EN.CITE`` field whose records carry ``Hidden="1"``.
+    hidden: bool = False
 
 
 @dataclass

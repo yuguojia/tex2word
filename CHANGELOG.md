@@ -42,6 +42,14 @@ those documents surfaced.
 
 ## Unreleased
 
+- **EndNote author–year citations.** `\\citet` and `\\textcite` now set
+  `AuthorYear="1"` on every embedded EndNote `<Cite>` record, preserving their
+  textual citation form when EndNote refreshes the document.
+- **Live EndNote `\\nocite` fields.** In EndNote citation mode,
+  `\\nocite{key}` now emits an `EN.CITE` field at the command position with
+  `Hidden="1"` on every embedded `<Cite>` record. `\\nocite{*}` expands to all
+  available bibliography records, allowing EndNote refreshes to retain entries
+  that have no visible in-text citation.
 - **Hard page breaks.** `\newpage`, `\clearpage` and `\pagebreak` now become
   Word hard page breaks (`w:br w:type="page"`), so the current page ends even
   when it is not full. The break is represented in the IR and manifest, so

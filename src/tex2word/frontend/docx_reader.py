@@ -714,11 +714,20 @@ class _Reader:
     def _endnote_cite(self, instr: str, result: str) -> ir.Cite:
         """An EndNote field → ``ir.Cite`` using label, else ``RN<RecNum>``."""
         keys: list[str] = []
+        hidden = False
+        author_year = False
         start = instr.find("<EndNote")
         if start >= 0:
             try:
                 root = etree.fromstring(instr[start:].encode("utf-8"))
-                for cite_el in root.findall(".//Cite"):
+                cite_elements = root.findall(".//Cite")
+                hidden = bool(cite_elements) and all(
+                    cite_el.get("Hidden") == "1" for cite_el in cite_elements
+                )
+                author_year = bool(cite_elements) and all(
+                    cite_el.get("AuthorYear") == "1" for cite_el in cite_elements
+                )
+                for cite_el in cite_elements:
                     label = cite_el.find("./record/label")
                     label_text = (
                         "".join(str(part) for part in label.itertext()).strip()
@@ -745,8 +754,8 @@ class _Reader:
             if not numbers:
                 numbers = re.findall(r"<key[^>]*>([^<]+)</key>", instr)
             keys = [f"RN{number.strip()}" for number in numbers if number.strip()]
-        cite = ir.Cite(keys, mode="paren")
-        cite.rendered = result or None
+        cite = ir.Cite(keys, mode="text" if author_year else "paren", hidden=hidden)
+        cite.rendered = None if hidden else result or None
         return cite
 
     # -- lists ------------------------------------------------------------ #

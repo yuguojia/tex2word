@@ -256,7 +256,10 @@ The GUI depends on this package for the actual conversion, so everything in
 - **Live citations** (opt-in `--citations zotero` or `--citations endnote`): emit
   `ADDIN ZOTERO_ITEM CSL_CITATION` / `CSL_BIBLIOGRAPHY` fields so citations are
   editable by Zotero/Mendeley in Word, or self-contained `ADDIN EN.CITE` fields
-  editable by EndNote (default is static formatted text).
+  editable by EndNote. In EndNote mode, `\nocite{key}` and `\nocite{*}` become
+  hidden `EN.CITE` records so uncited references survive an EndNote refresh
+  while `\citet` and `\textcite` become EndNote author–year citations (default
+  is static formatted text).
 - **Real CSL styles** (opt-in `--csl style.csl`, needs `tex2word[csl]`): a
   genuine `citeproc-py` engine formats in-text citations and the reference list
   against any `.csl` style, with proper sorting; the built-in heuristic is the

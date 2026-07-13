@@ -247,6 +247,12 @@ class DocumentWriter:
         if isinstance(block, ir.Heading):
             self._heading(block, body)
         elif isinstance(block, ir.Paragraph):
+            # A standalone \nocite is zero-width outside EndNote mode.  Do not
+            # introduce a blank paragraph merely to retain its IR position.
+            if self.citation_mode != "endnote" and block.inlines and all(
+                isinstance(node, ir.Cite) and node.hidden for node in block.inlines
+            ):
+                return
             p = self._styled_paragraph(self._par_style(block.style, default_style))
             if block.align:
                 self._set_align(p, block.align)
@@ -1387,6 +1393,16 @@ class DocumentWriter:
 
     def _cite(self, node: ir.Cite, p: _Element) -> None:
         rendered = node.rendered
+        if node.hidden:
+            keys = list(self._cite_items) if "*" in node.keys else node.keys
+            if self.citation_mode == "endnote" and any(
+                key in self._cite_items for key in keys
+            ):
+                from ..bib import endnote
+
+                for run in endnote.citation_field(node, self._cite_items, ""):
+                    p.append(run)
+            return
         if (
             self.citation_mode == "zotero"
             and rendered is not None
