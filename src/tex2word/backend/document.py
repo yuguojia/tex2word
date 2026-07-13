@@ -163,9 +163,10 @@ class DocumentWriter:
     # -- public ----------------------------------------------------------- #
 
     def build(self, doc: ir.Document) -> bytes:
-        from ..bib import zotero
+        from ..bib import endnote, zotero
 
         zotero.reset_ids()
+        endnote.reset_ids()
         # CJK glyphs inside math get the document's East-Asian font (xeCJK).
         self.math.cjk_font = doc.meta.cjk_main_font or doc.meta.cjk_sans_font
         for block in doc.blocks:
@@ -1035,15 +1036,19 @@ class DocumentWriter:
         self._inlines(block.title or [ir.Text("References")], heading)
         content.append(heading)
         zotero = self.citation_mode == "zotero"
+        endnote = self.citation_mode == "endnote"
         for i, item in enumerate(block.entries, start=1):
             p = self._styled_paragraph("Bibliography")
             start = fields.bookmark_start(_bookmark_for("bib_" + item.id))
             p.append(start)
-            if i == 1 and zotero:
-                # Open the CSL_BIBLIOGRAPHY field *before* the first reference so
-                # the whole list is the field result; closed after the last one
-                # below. This keeps Zotero refreshes in place (no duplicate list).
-                from ..bib.zotero import bibliography_field_begin
+            if i == 1 and (zotero or endnote):
+                # Open the live bibliography field *before* the first reference
+                # so the whole list is its cached result; close it after the last
+                # entry. This keeps reference-manager refreshes in place.
+                if zotero:
+                    from ..bib.zotero import bibliography_field_begin
+                else:
+                    from ..bib.endnote import bibliography_field_begin
 
                 for run in bibliography_field_begin():
                     p.append(run)
@@ -1052,8 +1057,11 @@ class DocumentWriter:
             p.append(self._run(format_reference(item)))
             p.append(fields.bookmark_end_for(start))
             content.append(p)
-        if zotero and block.entries:
-            from ..bib.zotero import bibliography_field_end
+        if (zotero or endnote) and block.entries:
+            if zotero:
+                from ..bib.zotero import bibliography_field_end
+            else:
+                from ..bib.endnote import bibliography_field_end
 
             closer = self._styled_paragraph("Bibliography")
             closer.append(bibliography_field_end())
@@ -1377,6 +1385,16 @@ class DocumentWriter:
             from ..bib import zotero
 
             for run in zotero.citation_field(node, self._cite_items, rendered):
+                p.append(run)
+            return
+        if (
+            self.citation_mode == "endnote"
+            and rendered is not None
+            and any(k in self._cite_items for k in node.keys)
+        ):
+            from ..bib import endnote
+
+            for run in endnote.citation_field(node, self._cite_items, rendered):
                 p.append(run)
             return
         if rendered is not None:

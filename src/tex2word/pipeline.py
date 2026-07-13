@@ -46,7 +46,8 @@ def convert_source(
     part inside the ``.docx`` to support round-tripping. With
     ``number_by_section`` figures/tables/equations are numbered ``N.M`` per
     section instead of with a flat counter. ``citation_mode`` is ``"static"``
-    (formatted text) or ``"zotero"`` (live ``CSL_CITATION`` fields). ``columns``
+    (formatted text), ``"zotero"`` (live ``CSL_CITATION`` fields), or
+    ``"endnote"`` (self-contained ``EN.CITE`` fields). ``columns``
     sets the page column count; the default (1) auto-detects
     ``\documentclass[twocolumn]``/``\twocolumn``/``multicols`` and any value >1
     overrides it (``figure*``/``table*`` and the title/abstract span all columns).

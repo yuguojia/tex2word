@@ -712,15 +712,40 @@ class _Reader:
         return cite
 
     def _endnote_cite(self, instr: str, result: str) -> ir.Cite:
-        """An EndNote ``ADDIN EN.CITE …<rec-number>…`` field → ``ir.Cite``.
-
-        EndNote stores no BibTeX key, so we use the record number / foreign key
-        as a stable identifier (best effort; the formatted text is kept too).
-        """
-        keys = re.findall(r"<rec-number>([^<]+)</rec-number>", instr)
+        """An EndNote field → ``ir.Cite`` using label, else ``RN<RecNum>``."""
+        keys: list[str] = []
+        start = instr.find("<EndNote")
+        if start >= 0:
+            try:
+                root = etree.fromstring(instr[start:].encode("utf-8"))
+                for cite_el in root.findall(".//Cite"):
+                    label = cite_el.find("./record/label")
+                    label_text = (
+                        "".join(str(part) for part in label.itertext()).strip()
+                        if label is not None
+                        else ""
+                    )
+                    if label_text:
+                        keys.append(label_text)
+                        continue
+                    rec_num = (cite_el.findtext("./RecNum") or "").strip()
+                    if not rec_num:
+                        rec_num = (cite_el.findtext("./record/rec-number") or "").strip()
+                    if rec_num:
+                        keys.append(f"RN{rec_num}")
+            except etree.XMLSyntaxError:
+                pass
         if not keys:
-            keys = re.findall(r"<key[^>]*>([^<]+)</key>", instr)
-        cite = ir.Cite([k.strip() for k in keys if k.strip()], mode="paren")
+            labels = re.findall(r"<label(?:\s[^>]*)?>([^<]+)</label>", instr)
+            keys = [label.strip() for label in labels if label.strip()]
+        if not keys:
+            numbers = re.findall(r"<RecNum>([^<]+)</RecNum>", instr)
+            if not numbers:
+                numbers = re.findall(r"<rec-number>([^<]+)</rec-number>", instr)
+            if not numbers:
+                numbers = re.findall(r"<key[^>]*>([^<]+)</key>", instr)
+            keys = [f"RN{number.strip()}" for number in numbers if number.strip()]
+        cite = ir.Cite(keys, mode="paren")
         cite.rendered = result or None
         return cite
 
