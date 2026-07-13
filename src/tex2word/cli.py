@@ -35,9 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     conv.add_argument(
         "--citations",
-        choices=("static", "zotero"),
+        choices=("static", "zotero", "endnote"),
         default="static",
-        help="citation output: 'static' formatted text, or live 'zotero' CSL fields",
+        help="citation output: static text, or live Zotero/EndNote Word fields",
     )
     conv.add_argument(
         "--columns", type=int, default=1, metavar="N",

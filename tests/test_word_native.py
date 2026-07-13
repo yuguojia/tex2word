@@ -49,7 +49,7 @@ def test_endnote_citation_field_to_cite():
     instr = ("ADDIN EN.CITE <EndNote><Cite><record>"
              "<rec-number>42</rec-number></record></Cite></EndNote>")
     cites = _cites(_field_para(instr, "(Smith 2020)"))
-    assert cites and cites[0].keys == ["42"]
+    assert cites and cites[0].keys == ["RN42"]
 
 
 def test_multi_item_csl_citation():
