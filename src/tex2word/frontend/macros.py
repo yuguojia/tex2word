@@ -33,6 +33,18 @@ _NOVALUE = "\x00NoValue\x00"
 _BOOL_T = "\x00BoolTrue\x00"
 _BOOL_F = "\x00BoolFalse\x00"
 
+# These commands are native tex2word directives.  Documents commonly declare
+# them as empty ``\providecommand`` stubs so the same source compiles under TeX;
+# those compatibility definitions must be removed without expanding away the
+# real directive uses that later parser/preamble passes consume.
+_TEXWORD_DIRECTIVES = frozenset({
+    "texwordstyle",
+    "texwordtemplate",
+    "texwordparstyle",
+    "texwordcharstyle",
+    "texwordcaption",
+})
+
 
 @dataclass
 class Macro:
@@ -488,5 +500,9 @@ def expand_macros(source: str, base_dir: str = ".") -> str:
     pkg_macros = _load_local_package_macros(source, base_dir)
     macros, stripped = collect_macros(source)
     # document-body definitions take precedence over package definitions
-    merged = {**pkg_macros, **macros}
+    merged = {
+        name: macro
+        for name, macro in {**pkg_macros, **macros}.items()
+        if name not in _TEXWORD_DIRECTIVES
+    }
     return expand(stripped, merged)

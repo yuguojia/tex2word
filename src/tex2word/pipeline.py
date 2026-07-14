@@ -150,6 +150,11 @@ def convert_source(
         table_text_style_id=roles.table_text,
         threeline_table_style_id=roles.threeline_table,
         body_style_id=roles.body,
+        first_body_style_id=(
+            roles.noindent
+            if reference and doc.meta.document_class and not doc.meta.ctex
+            else None
+        ),
         star_heading_style_ids=roles.star_headings,
         style_remap=roles.style_remap,
         par_style_names=roles.par_style_names,
@@ -362,6 +367,7 @@ class _RoleStyles:
     table_text: str | None = None  # paragraph style for text inside table cells
     threeline_table: str | None = None  # Word table style for a 三线表 (first cmd \toprule)
     body: str | None = None  # paragraph style for ordinary body-text (正文) paragraphs
+    noindent: str | None = None  # opening/after-heading body paragraph style
     itemize: str | None = None  # paragraph style for itemize list items
     enumerate: str | None = None  # paragraph style for enumerate list items
     star_headings: list = field(default_factory=lambda: [None, None, None, None, None])
@@ -406,6 +412,8 @@ def _assign_role(styles: _RoleStyles, role: str, sid: str, *, book: bool = False
         styles.threeline_table = sid
     elif role == "body":
         styles.body = sid
+    elif role == "noindent":
+        styles.noindent = sid
     elif role in ("itemize", "listbullet"):
         styles.itemize = sid
     elif role in ("enumerate", "listnumber"):

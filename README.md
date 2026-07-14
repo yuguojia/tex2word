@@ -163,6 +163,11 @@ The GUI depends on this package for the actual conversion, so everything in
   character style to inline text; if `Style Name` is a linked paragraph/character
   style, the linked character style is used. The declaration form
   `{\texwordcharstyle{Style Name}text}` is also supported.
+  For standard classes such as `article` and `book`, binding both
+  `\texwordstyle{noindent}{...}` and `\texwordstyle{body}{...}` makes the opening
+  body paragraph and the first paragraph after each heading use `noindent`, while
+  later paragraphs use `body`. ctex classes (and `\usepackage{ctex}`) retain their
+  existing first-paragraph indentation behaviour.
 - **Structure & styles**: `\title`/`\author`/`\date`/`abstract`, `\section`…
   `\subparagraph` → Word Title/Heading 1–4 (visible in the Navigation pane),
   paragraphs, `\textbf`/`\emph`/`\texttt`/`\underline`/`\textsc`, quotes, code.

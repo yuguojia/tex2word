@@ -95,6 +95,19 @@ def test_newcommand_expansion():
     assert "Hello World!" in expanded
 
 
+def test_texword_directives_survive_empty_providecommand_stubs():
+    source = (
+        r"\providecommand{\texwordparstyle}[1]{}"
+        r"\providecommand{\texwordcharstyle}[2]{}"
+        r"\texwordparstyle{Addresses}Text "
+        r"\texwordcharstyle{Strong}{bold}"
+    )
+    expanded = expand_macros(source)
+    assert r"\providecommand" not in expanded
+    assert r"\texwordparstyle{Addresses}" in expanded
+    assert r"\texwordcharstyle{Strong}{bold}" in expanded
+
+
 def test_def_expansion():
     expanded = expand_macros(r"\def\x{42}value is \x.")
     assert "value is 42." in expanded
