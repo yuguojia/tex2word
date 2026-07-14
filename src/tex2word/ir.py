@@ -479,6 +479,10 @@ class DocumentMeta(Node):
     language: str | None = None  # BCP-47 document language (from babel/polyglossia)
     running_head: str | None = None  # \markboth/\markright/\title[short] running head
     columns: int = 1  # body column count (\documentclass[twocolumn]/\twocolumn)
+    document_class: str | None = None  # class name from \documentclass{...}
+    # ctex document class/package: unlike the standard English classes, ctex keeps
+    # the first paragraph after a heading indented by default.
+    ctex: bool = False
     # XeLaTeX/fontspec + xeCJK font selection (from the preamble).
     main_font: str | None = None  # \setmainfont -> Latin ascii/hAnsi default
     cjk_main_font: str | None = None  # \setCJKmainfont -> East-Asian default (eastAsia)

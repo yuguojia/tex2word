@@ -1043,6 +1043,22 @@ def test_texwordparstyle_sets_one_paragraph_style(tmp_path):
     assert doc.count('w:pStyle w:val="pt"') == 1
 
 
+def test_texwordparstyle_survives_pdf_latex_compatibility_stub(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\providecommand{\texwordparstyle}[1]{}"
+        r"\begin{document}"
+        r"\texwordparstyle{部分标题}Styled paragraph."
+        r"\end{document}"
+    )
+    result = convert_source(src, reference_doc=str(ref))
+    paragraph = next(b for b in result.document.blocks if hasattr(b, "style"))
+    assert paragraph.style == "部分标题"
+    doc = _part(result.docx, "word/document.xml").decode()
+    assert doc.count('w:pStyle w:val="pt"') == 1
+
+
 def test_texwordparstyle_unknown_style_warns_and_falls_back(tmp_path):
     # an unknown style name warns once and the paragraph keeps the default (Normal).
     ref = tmp_path / "template.docx"
@@ -1132,6 +1148,72 @@ def test_noindent_adopts_bound_style(tmp_path):
     doc = _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml").decode()
     assert doc.count('w:pStyle w:val="ni"') == 1   # only the \noindent paragraph
     assert 'w:pStyle w:val="Normal"' in doc          # the plain paragraph stays Normal
+
+
+def test_english_classes_use_noindent_for_opening_paragraphs(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    for cls, heading in (("article", "section"), ("book", "chapter")):
+        src = (
+            rf"\documentclass{{{cls}}}"
+            r"\texwordstyle{noindent}{部分标题}"
+            r"\texwordstyle{body}{正文缩进}"
+            r"\begin{document}"
+            r"Opening paragraph." "\n\n"
+            r"Following paragraph."
+            rf"\{heading}{{A heading}}"
+            r"First after heading." "\n\n"
+            r"Second after heading."
+            r"\end{document}"
+        )
+        doc = _part(
+            convert_source(src, reference_doc=str(ref)).docx,
+            "word/document.xml",
+        ).decode()
+        assert doc.count('w:pStyle w:val="pt"') == 2
+        assert doc.count('w:pStyle w:val="ni"') == 2
+
+
+def test_texwordparstyle_overrides_automatic_english_first_style(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = (
+        r"\documentclass{article}"
+        r"\texwordstyle{noindent}{部分标题}"
+        r"\texwordstyle{body}{正文缩进}"
+        r"\begin{document}\section{A heading}"
+        r"\texwordparstyle{Abstract}Explicit paragraph." "\n\n"
+        r"Following paragraph."
+        r"\end{document}"
+    )
+    doc = _part(
+        convert_source(src, reference_doc=str(ref)).docx,
+        "word/document.xml",
+    ).decode()
+    assert doc.count('w:pStyle w:val="abs"') == 1
+    assert 'w:pStyle w:val="pt"' not in doc
+    assert doc.count('w:pStyle w:val="ni"') == 1
+
+
+def test_ctex_keeps_body_style_for_first_paragraphs(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    for preamble in (r"\documentclass{ctexart}",
+                     r"\documentclass{article}\usepackage{ctex}"):
+        src = (
+            preamble
+            + r"\texwordstyle{noindent}{部分标题}"
+            + r"\texwordstyle{body}{正文缩进}"
+            + r"\begin{document}\section{A heading}"
+            + "First paragraph.\n\nSecond paragraph."
+            + r"\end{document}"
+        )
+        doc = _part(
+            convert_source(src, reference_doc=str(ref)).docx,
+            "word/document.xml",
+        ).decode()
+        assert 'w:pStyle w:val="pt"' not in doc
+        assert doc.count('w:pStyle w:val="ni"') == 2
 
 
 def test_noindent_dropped_when_unbound(tmp_path):

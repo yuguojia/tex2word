@@ -2752,11 +2752,31 @@ def _collect_glossary_entries(source: str, glossary: dict[str, str]) -> None:
 _BOOK_CLASS_RE = re.compile(
     r"\\documentclass(?:\[[^\]]*\])?\{(book|report|memoir|scrbook|scrreprt)\}"
 )
+_DOCUMENT_CLASS_RE = re.compile(
+    r"\\documentclass(?:\[[^\]]*\])?\{([^}]*)\}"
+)
 
 
 def _is_book_class(source: str) -> bool:
     """True for a book/report-style document (top sectioning level is \\chapter)."""
     return bool(_BOOK_CLASS_RE.search(source)) or bool(re.search(r"\\chapter\b", source))
+
+
+def _document_class(source: str) -> str | None:
+    """Return the declared class name, if one is present."""
+    match = _DOCUMENT_CLASS_RE.search(source)
+    return match.group(1).strip() if match else None
+
+
+_CTEX_RE = re.compile(
+    r"\\documentclass(?:\[[^\]]*\])?\{ctex(?:art|rep|book)\}"
+    r"|\\usepackage(?:\[[^\]]*\])?\{ctex\}"
+)
+
+
+def _is_ctex_document(source: str) -> bool:
+    """True when a ctex class or the ctex package controls paragraph conventions."""
+    return bool(_CTEX_RE.search(source))
 
 
 _DOCCLASS_OPTS_RE = re.compile(r"\\documentclass\s*\[([^\]]*)\]")
@@ -2827,6 +2847,8 @@ def parse_document(
     builder.box_envs = _collect_tcolorbox_envs(theorem_src)  # \newtcolorbox callouts
     builder.custom_floats.update(custom_floats)
     builder.book_mode = _is_book_class(expanded)
+    builder.meta.document_class = _document_class(expanded)
+    builder.meta.ctex = _is_ctex_document(expanded)
     _collect_color_defs(expanded, builder.colors)  # \definecolor/\colorlet (preamble + body)
     _collect_acronyms(expanded, builder.acronyms)   # \newacronym (preamble + body)
     _collect_glossary_entries(expanded, builder.glossary)  # \newglossaryentry terms
@@ -2913,6 +2935,7 @@ _STYLE_OVERRIDE_ROLES = {
     "chapter*", "section*", "subsection*", "subsubsection*", "paragraph*",
     "subparagraph*",
     "body",           # paragraph style for ordinary body-text (正文) paragraphs
+    "noindent",       # explicit/automatic unindented body paragraphs
     "table",          # paragraph style for text inside table cells (default Normal)
     "threelinetable", # Word *table* style applied to a 三线表 (first cmd is \toprule)
 }
@@ -2962,7 +2985,10 @@ def _detect_style_overrides(doc: ir.Document, source: str) -> None:
     unnumbered sectioning commands, leaving numbered headings on the built-in
     navigation styles. ``body`` sets the paragraph style of ordinary body-text (正文)
     paragraphs (default ``Normal``), so 正文 can be an indented ``normal-indent``-style
-    rather than plain ``Normal``. ``table`` sets the paragraph style of the text inside every
+    rather than plain ``Normal``. ``noindent`` styles explicit ``\\noindent``
+    paragraphs and, with a reference document and a standard non-ctex class, the
+    opening paragraph and first paragraph after a heading. ``table`` sets the
+    paragraph style of the text inside every
     table cell (default ``Normal``); ``threelinetable`` names a Word *table* style
     applied to tables whose first command is ``\\toprule`` (booktabs 三线表), so the
     template's three-line border format takes effect. The pipeline resolves each name

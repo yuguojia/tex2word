@@ -67,6 +67,7 @@ class DocumentWriter:
         table_text_style_id: str | None = None,
         threeline_table_style_id: str | None = None,
         body_style_id: str | None = None,
+        first_body_style_id: str | None = None,
         star_heading_style_ids: list[str | None] | None = None,
         style_remap: dict[str, str] | None = None,
         par_style_names: dict[str, str] | None = None,
@@ -101,6 +102,10 @@ class DocumentWriter:
         #: the default paragraph style at body level (else the built-in Normal), so
         #: 正文 can be e.g. an indented "normal-indent" style instead of plain Normal.
         self._body_style = body_style_id or "Normal"
+        #: For standard English classes, the opening body paragraph and the first
+        #: paragraph after each heading use the bound no-indent style.  The pipeline
+        #: only supplies this when a reference template exists and ctex is not used.
+        self._first_body_style = first_body_style_id
         #: \texwordstyle{section*}/{heading1*}/... overrides for starred headings
         #: only. Numbered headings keep Heading1..5 for navigation and numbering.
         self.star_heading_style_ids = (star_heading_style_ids or []) + [None] * 5
@@ -191,9 +196,24 @@ class DocumentWriter:
         if has_title:
             # the title/authors/abstract are set full-width above the columns.
             regions.append((1 if n > 1 else n, lambda: self._title_block(doc.meta, body)))
+        first_body_paragraph = True
         for block in doc.blocks:
             cols = 1 if (n > 1 and getattr(block, "spanning", False)) else n
-            regions.append((cols, lambda b=block: self._block(b, body)))
+            default_style = self._body_style
+            if isinstance(block, ir.Heading):
+                first_body_paragraph = True
+            elif isinstance(block, ir.Paragraph):
+                if first_body_paragraph and self._first_body_style:
+                    default_style = self._first_body_style
+                # An explicit per-paragraph style still wins in _block(), but it
+                # consumes the opening-paragraph position like any other paragraph.
+                first_body_paragraph = False
+            regions.append((
+                cols,
+                lambda b=block, style=default_style: self._block(
+                    b, body, default_style=style,
+                ),
+            ))
 
         prev: int | None = None
         for cols, emit in regions:

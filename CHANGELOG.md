@@ -112,7 +112,9 @@ those documents surfaced.
   `--reference-doc` / `\texwordtemplate` template by its display name (what Word
   shows); an unknown name warns and the paragraph keeps the default style. Under
   pdfLaTeX add `\providecommand{\texwordparstyle}[1]{}` so the directive is a
-  no-op there.
+  no-op there. These compatibility stubs are protected from tex2word's user-macro
+  expansion, so they do not erase `\texwordparstyle` / `\texwordcharstyle` uses
+  before the document parser sees them.
 - **Inline Word character styles from the source.** `\texwordcharstyle{Style Name}{text}`
   applies a reference-doc character style to the wrapped text, by the style's
   Word display name. Linked paragraph/character styles are accepted by naming
@@ -122,6 +124,10 @@ those documents surfaced.
 - **`\noindent` can adopt a Word style.** `\texwordstyle{noindent}{Style Name}` binds
   `\noindent` to a reference-doc style, so every paragraph introduced by `\noindent`
   takes that style (the global counterpart of the per-paragraph `\texwordparstyle`).
+  With a reference document, standard non-ctex classes also use it automatically
+  for the opening body paragraph and the first paragraph after each heading; later
+  paragraphs use the `body` binding. ctex classes/package keep their existing
+  first-paragraph indentation behaviour.
   An explicit `\texwordparstyle` on the same paragraph still wins; with no binding
   `\noindent` is dropped as before. Note tex2word does not expand user
   `\renewcommand`, so `\noindent` cannot be rebound from the source itself — this
@@ -388,7 +394,7 @@ those documents surfaced.
   | `bibliography` | reference-list entries | explicit or name auto-discovery |
   | `footnote` | footnote / endnote text | explicit or name auto-discovery |
   | `body` | ordinary body-text (正文) paragraphs (default `Normal`) | explicit only |
-  | `noindent` | paragraphs introduced by `\noindent`, scoped one paragraph at a time | explicit only |
+  | `noindent` | explicit `\noindent`; also opening/after-heading paragraphs for standard non-ctex classes with a reference document | explicit binding |
   | `table` | text inside table cells (default `Normal`) | explicit only |
   | `threelinetable` | Word *table* style for a 三线表 (tabular whose first command is `\toprule`) | explicit only |
 
