@@ -9,7 +9,14 @@ The plugin supports:
     \end{suppitem}
 
     \supp{a}
+    \suppitemsep{\newpage}
     \printsupp{Figure}
+
+By default, printed items are separated by a blank line. Use
+    \suppitemsep{\newpage}
+to separate every printed item with a page break, or
+    \printsupp[\newpage]{Figure}
+to override the separator for one print command.
 """
 
 from __future__ import annotations
@@ -21,18 +28,26 @@ from tex2word.report import ConversionReport
 def register(registry: PluginRegistry) -> None:
     registry.add_environment("suppitem", "{{")
     registry.add_macro("supp", "{")
-    registry.add_macro("printsupp", "{")
+    registry.add_macro("suppitemsep", "{")
+    registry.add_macro("suppitemseparator", "{")
+    registry.add_macro("printsupp", "[{")
     registry.add_preprocessor(preprocess_source)
 
 
 def preprocess_source(source: str, base_dir: str, report: ConversionReport) -> str:
     source, items = _collect_suppitems(source)
+    source, separator = _collect_separator(source)
     order: list[str] = []
     source = _replace_one_arg_macro(source, "supp", lambda key: _record(order, key))
-    return _replace_one_arg_macro(
+    return _replace_printsupp_macro(
         source,
-        "printsupp",
-        lambda kind: _render(kind, order, items, report),
+        lambda kind, sep: _render(
+            kind,
+            order,
+            items,
+            report,
+            separator if sep is None else _normalize_separator(sep),
+        ),
     )
 
 
@@ -47,6 +62,7 @@ def _render(
     order: list[str],
     items: dict[str, tuple[str, str]],
     report: ConversionReport,
+    separator: str,
 ) -> str:
     parts: list[str] = []
     seen: set[str] = set()
@@ -61,7 +77,26 @@ def _render(
         item_kind, body = item
         if item_kind == kind:
             parts.append(body.strip("\n"))
-    return "\n\n".join(part for part in parts if part.strip())
+    return separator.join(part for part in parts if part.strip())
+
+
+def _collect_separator(source: str) -> tuple[str, str]:
+    separator = "\n\n"
+
+    def set_separator(sep: str) -> str:
+        nonlocal separator
+        separator = _normalize_separator(sep)
+        return ""
+
+    for name in ("suppitemsep", "suppitemseparator"):
+        source = _replace_one_arg_macro(source, name, set_separator)
+    return source, separator
+
+
+def _normalize_separator(separator: str) -> str:
+    if not separator:
+        return ""
+    return "\n" + separator + "\n"
 
 
 def _collect_suppitems(source: str) -> tuple[str, dict[str, tuple[str, str]]]:
@@ -111,6 +146,54 @@ def _replace_one_arg_macro(source: str, name: str, repl) -> str:
         out.append(repl(arg.strip()))
         pos = end
     return "".join(out)
+
+
+def _replace_printsupp_macro(source: str, repl) -> str:
+    marker = r"\printsupp"
+    out: list[str] = []
+    pos = 0
+    while True:
+        start = source.find(marker, pos)
+        if start == -1:
+            out.append(source[pos:])
+            break
+        after = start + len(marker)
+        if after < len(source) and source[after].isalpha():
+            out.append(source[pos:after])
+            pos = after
+            continue
+        separator, arg_pos = _read_optional(source, after)
+        kind, end = _read_group(source, arg_pos)
+        if end == arg_pos:
+            out.append(source[pos:after])
+            pos = after
+            continue
+        out.append(source[pos:start])
+        out.append(repl(kind.strip(), separator))
+        pos = end
+    return "".join(out)
+
+
+def _read_optional(source: str, pos: int) -> tuple[str | None, int]:
+    while pos < len(source) and source[pos] in " \t\r\n":
+        pos += 1
+    if pos >= len(source) or source[pos] != "[":
+        return None, pos
+    depth = 0
+    i = pos
+    while i < len(source):
+        ch = source[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return source[pos + 1 : i], i + 1
+        i += 1
+    return source[pos + 1 :], len(source)
 
 
 def _read_group(source: str, pos: int) -> tuple[str, int]:
