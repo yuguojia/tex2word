@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 _NEWCOMMAND_RE = re.compile(
@@ -496,14 +497,21 @@ def local_package_sources(
     return "\n".join(p for p in parts if p)
 
 
-def expand_macros(source: str, base_dir: str = ".") -> str:
+def expand_macros(
+    source: str,
+    base_dir: str = ".",
+    protected_names: Iterable[str] | None = None,
+) -> str:
     """Collect user macros (incl. local ``.sty`` packages) and expand them."""
     pkg_macros = _load_local_package_macros(source, base_dir)
     macros, stripped = collect_macros(source)
+    protected = set(_TEXWORD_DIRECTIVES)
+    if protected_names is not None:
+        protected.update(name[1:] if name.startswith("\\") else name for name in protected_names)
     # document-body definitions take precedence over package definitions
     merged = {
         name: macro
         for name, macro in {**pkg_macros, **macros}.items()
-        if name not in _TEXWORD_DIRECTIVES
+        if name not in protected
     }
     return expand(stripped, merged)

@@ -1,8 +1,9 @@
 """Small extension API for project-local tex2word Python plugins.
 
-Plugins are intentionally narrow: they may rewrite the flattened LaTeX source
-before the normal parser runs, and they may add pylatexenc macro/environment
-signatures so custom commands consume their arguments correctly.
+Plugins are intentionally narrow: they may rewrite the flattened,
+macro-expanded LaTeX source before the normal parser runs, and they may add
+pylatexenc macro/environment signatures so custom commands consume their
+arguments correctly.
 """
 
 from __future__ import annotations
@@ -37,12 +38,21 @@ class PluginRegistry:
     source_preprocessors: list[SourcePreprocessor] = field(default_factory=list)
     macro_specs: list[MacroSpec] = field(default_factory=list)
     environment_specs: list[EnvironmentSpec] = field(default_factory=list)
+    protected_macro_names: set[str] = field(default_factory=set)
 
     def add_preprocessor(self, fn: SourcePreprocessor) -> None:
         self.source_preprocessors.append(fn)
 
     def add_macro(self, name: str | MacroSpec, argspec: str = "") -> None:
-        self.macro_specs.append(name if isinstance(name, MacroSpec) else MacroSpec(name, argspec))
+        spec = name if isinstance(name, MacroSpec) else MacroSpec(name, argspec)
+        self.macro_specs.append(spec)
+        self.protect_macro(spec.macroname)
+
+    def protect_macro(self, name: str) -> None:
+        """Prevent compatibility macro definitions from consuming plugin commands."""
+        name = name[1:] if name.startswith("\\") else name
+        if name:
+            self.protected_macro_names.add(name)
 
     def add_environment(self, name: str | EnvironmentSpec, argspec: str = "") -> None:
         self.environment_specs.append(
