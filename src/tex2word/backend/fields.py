@@ -180,7 +180,7 @@ def ref_field(bookmark: str, cached: str = "", *, paragraph_number: bool = False
     # \h = hyperlink to the bookmark. \r inserts the paragraph (list) number of
     # the bookmark in relative context -- used for numbered-section references.
     switches = "\\r \\h" if paragraph_number else "\\h"
-    return field(f"REF {bookmark} {switches}", cached)
+    return field(f"REF {bookmark} {switches} \\* CHARFORMAT", cached)
 
 
 def pageref_field(bookmark: str, cached: str = "") -> list[_Element]:

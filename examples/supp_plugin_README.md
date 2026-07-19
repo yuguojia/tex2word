@@ -209,7 +209,7 @@ See \sref{fig_a}.
 This expands to a native tex2word field:
 
 ```tex
-\texwordfield{INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_a \!}
+\texwordfield{INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_a \! \* CHARFORMAT}
 ```
 
 The bookmark argument is sanitized the same way tex2word sanitizes `\label`
@@ -233,7 +233,7 @@ Absolute paths remain absolute:
 emits:
 
 ```text
-INCLUDETEXT "C:/Users/UserName/My Documents/file.docx" bookmarkname \!
+INCLUDETEXT "C:/Users/UserName/My Documents/file.docx" bookmarkname \! \* CHARFORMAT
 ```
 
 Aliases for setting the external document:

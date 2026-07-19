@@ -194,7 +194,7 @@ See \sref{bookmarkname}.
     para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
     field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
 
-    assert field.code == r'INCLUDETEXT "{FILENAME \p}/../Image.png" bookmarkname \!'
+    assert field.code == r'INCLUDETEXT "{FILENAME \p}/../Image.png" bookmarkname \! \* CHARFORMAT'
 
 
 def test_sref_sanitizes_label_like_bookmark_name():
@@ -209,7 +209,7 @@ See \sref{fig:demo}.
     para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
     field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
 
-    assert field.code == r'INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_demo \!'
+    assert field.code == r'INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_demo \! \* CHARFORMAT'
 
 
 def test_sref_absolute_docx_path_stays_absolute():
@@ -224,7 +224,10 @@ def test_sref_absolute_docx_path_stays_absolute():
     para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
     field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
 
-    assert field.code == r'INCLUDETEXT "C:/Users/UserName/My Documents/file.docx" bookmarkname \!'
+    assert (
+        field.code
+        == r'INCLUDETEXT "C:/Users/UserName/My Documents/file.docx" bookmarkname \! \* CHARFORMAT'
+    )
 
 
 def test_sref_warns_without_configured_docx_file():
