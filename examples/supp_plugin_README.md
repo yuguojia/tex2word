@@ -212,6 +212,9 @@ This expands to a native tex2word field:
 \texwordfield{INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_a \!}
 ```
 
+The bookmark argument is sanitized the same way tex2word sanitizes `\label`
+bookmarks, so `\sref{fig:a}` targets `fig_a` in the generated Word field.
+
 Relative paths are written as:
 
 ```text
