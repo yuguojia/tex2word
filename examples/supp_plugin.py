@@ -9,6 +9,8 @@ The plugin supports:
     \end{suppitem}
 
     \supp{a}
+    \exportsupp{aaa.tmp}
+    \importsupp{aaa.tmp}
     \suppitemsep{\newpage}
     \printsupp{Figure}
 
@@ -17,9 +19,17 @@ By default, printed items are separated by a blank line. Use
 to separate every printed item with a page break, or
     \printsupp[\newpage]{Figure}
 to override the separator for one print command.
+
+Use \exportsupp{aaa.tmp} in a source document to write the \supp order, then
+\importsupp{aaa.tmp} in another document to reuse that order when printing
+suppitem content. The file stores a JSON list of keys and is resolved relative
+to the current TeX base directory.
 """
 
 from __future__ import annotations
+
+import json
+import os
 
 from tex2word import PluginRegistry
 from tex2word.report import ConversionReport
@@ -28,6 +38,8 @@ from tex2word.report import ConversionReport
 def register(registry: PluginRegistry) -> None:
     registry.add_environment("suppitem", "{{")
     registry.add_macro("supp", "{")
+    registry.add_macro("exportsupp", "{")
+    registry.add_macro("importsupp", "{")
     registry.add_macro("suppitemsep", "{")
     registry.add_macro("suppitemseparator", "{")
     registry.add_macro("printsupp", "[{")
@@ -38,7 +50,9 @@ def preprocess_source(source: str, base_dir: str, report: ConversionReport) -> s
     source, items = _collect_suppitems(source)
     source, separator = _collect_separator(source)
     order: list[str] = []
-    source = _replace_one_arg_macro(source, "supp", lambda key: _record(order, key))
+    export_paths: list[str] = []
+    source = _replace_order_macros(source, order, export_paths, base_dir, report)
+    _write_exports(export_paths, order, base_dir, report)
     return _replace_printsupp_macro(
         source,
         lambda kind, sep: _render(
@@ -55,6 +69,70 @@ def _record(order: list[str], key: str) -> str:
     if key:
         order.append(key)
     return ""
+
+
+def _record_export(paths: list[str], path: str) -> str:
+    if path:
+        paths.append(path)
+    return ""
+
+
+def _import_order(
+    order: list[str],
+    path: str,
+    base_dir: str,
+    report: ConversionReport,
+) -> str:
+    if not path:
+        return ""
+    resolved = _resolve_path(path, base_dir)
+    try:
+        with open(resolved, encoding="utf-8") as fh:
+            keys = _decode_order(fh.read())
+    except OSError as exc:
+        report.warn("importsupp", f"could not read {path!r}: {exc}")
+        return ""
+    order.extend(key for key in keys if key)
+    return ""
+
+
+def _write_exports(
+    paths: list[str],
+    order: list[str],
+    base_dir: str,
+    report: ConversionReport,
+) -> None:
+    for path in paths:
+        resolved = _resolve_path(path, base_dir)
+        try:
+            parent = os.path.dirname(resolved)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(resolved, "w", encoding="utf-8") as fh:
+                json.dump(order, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+            report.info("exportsupp", f"wrote {path!r}")
+        except OSError as exc:
+            report.warn("exportsupp", f"could not write {path!r}: {exc}")
+
+
+def _decode_order(content: str) -> list[str]:
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return [line.strip() for line in content.splitlines() if line.strip()]
+    if isinstance(data, list):
+        return [str(item).strip() for item in data if str(item).strip()]
+    if isinstance(data, dict) and isinstance(data.get("order"), list):
+        return [str(item).strip() for item in data["order"] if str(item).strip()]
+    return []
+
+
+def _resolve_path(path: str, base_dir: str) -> str:
+    path = path.strip()
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+    return os.path.normpath(os.path.join(base_dir, path))
 
 
 def _render(
@@ -123,6 +201,57 @@ def _collect_suppitems(source: str) -> tuple[str, dict[str, tuple[str, str]]]:
     return "".join(out), items
 
 
+def _replace_order_macros(
+    source: str,
+    order: list[str],
+    export_paths: list[str],
+    base_dir: str,
+    report: ConversionReport,
+) -> str:
+    handlers = {
+        "supp": lambda value: _record(order, value),
+        "importsupp": lambda value: _import_order(order, value, base_dir, report),
+        "exportsupp": lambda value: _record_export(export_paths, value),
+    }
+    out: list[str] = []
+    pos = 0
+    while True:
+        found = _find_next_macro(source, pos, tuple(handlers))
+        if found is None:
+            out.append(source[pos:])
+            break
+        start, name = found
+        marker_end = start + len(name) + 1
+        arg, end = _read_group(source, marker_end)
+        if end == marker_end:
+            out.append(source[pos:marker_end])
+            pos = marker_end
+            continue
+        out.append(source[pos:start])
+        out.append(handlers[name](arg.strip()))
+        pos = end
+    return "".join(out)
+
+
+def _find_next_macro(source: str, pos: int, names: tuple[str, ...]) -> tuple[int, str] | None:
+    best: tuple[int, str] | None = None
+    for name in names:
+        marker = "\\" + name
+        search = pos
+        while True:
+            start = source.find(marker, search)
+            if start == -1:
+                break
+            after = start + len(marker)
+            if after < len(source) and source[after].isalpha():
+                search = after
+                continue
+            if best is None or start < best[0]:
+                best = (start, name)
+            break
+    return best
+
+
 def _replace_one_arg_macro(source: str, name: str, repl) -> str:
     marker = "\\" + name
     out: list[str] = []
@@ -169,9 +298,16 @@ def _replace_printsupp_macro(source: str, repl) -> str:
             pos = after
             continue
         out.append(source[pos:start])
-        out.append(repl(kind.strip(), separator))
+        out.append(_block_fragment(repl(kind.strip(), separator)))
         pos = end
     return "".join(out)
+
+
+def _block_fragment(text: str) -> str:
+    text = text.strip("\n")
+    if not text.strip():
+        return ""
+    return "\n\n" + text + "\n\n"
 
 
 def _read_optional(source: str, pos: int) -> tuple[str | None, int]:

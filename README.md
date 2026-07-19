@@ -69,6 +69,8 @@ signatures:
 def register(registry):
     registry.add_environment("suppitem", "{{")
     registry.add_macro("supp", "{")
+    registry.add_macro("exportsupp", "{")
+    registry.add_macro("importsupp", "{")
     registry.add_macro("suppitemsep", "{")
     registry.add_macro("printsupp", "[{")
     registry.add_preprocessor(preprocess_source)
@@ -80,10 +82,12 @@ def preprocess_source(source, base_dir, report):
 ```
 
 See `examples/supp_plugin.py` for a complete implementation of
-`\begin{suppitem}{Kind}{key}...\end{suppitem}`, `\supp{key}`, and
-`\printsupp{Kind}`. Its default item separator is a blank line; configure it
-with a TeX fragment such as `\suppitemsep{\newpage}`, or override one print call
-with `\printsupp[\newpage]{Figure}`.
+`\begin{suppitem}{Kind}{key}...\end{suppitem}`, `\supp{key}`,
+`\exportsupp{order.tmp}`, `\importsupp{order.tmp}`, and `\printsupp{Kind}`.
+Its default item separator is a blank line; configure it with a TeX fragment
+such as `\suppitemsep{\newpage}`, or override one print call with
+`\printsupp[\newpage]{Figure}`. Export/import paths are resolved relative to
+the converted `.tex` file's base directory.
 
 ### Chinese / CJK documents (XeLaTeX)
 
