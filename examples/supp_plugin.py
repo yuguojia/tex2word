@@ -298,7 +298,7 @@ def _replace_sref_macros(source: str, report: ConversionReport) -> str:
 def _sref_field(docx_file: str, bookmark: str) -> str:
     return (
         rf'\texwordfield{{INCLUDETEXT "{_field_quote(_field_path(docx_file))}" '
-        rf"{sanitize_bookmark(bookmark)} \!}}"
+        rf"{sanitize_bookmark(bookmark)} \! \* CHARFORMAT}}"
     )
 
 

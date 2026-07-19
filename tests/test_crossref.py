@@ -63,7 +63,7 @@ def test_enumerate_item_ref_end_to_end():
     names = {b.get(f"{{{_W}}}name") for b in root.iter(f"{{{_W}}}bookmarkStart")}
     assert {"rq_base", "rq_prod", "rq_abla"} <= names
     instrs = [i.text.strip() for i in root.iter(f"{{{_W}}}instrText")]
-    assert "REF rq_prod \\r \\h" in instrs  # list-number reference
+    assert "REF rq_prod \\r \\h \\* CHARFORMAT" in instrs  # list-number reference
 
 
 def test_unresolved_ref_warns_not_raises():
