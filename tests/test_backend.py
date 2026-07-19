@@ -86,8 +86,8 @@ def test_eqref_emits_ref_field():
     root = document_root(convert_source(src).docx)
     instrs = "".join(t.text or "" for t in _xpath(root, "//w:instrText"))
     assert (
-        "REF ref_eq_e \\h \\* CHARFORMAT" in instrs
-        or "REF eq_e \\h \\* CHARFORMAT" in instrs
+        "REF ref_eq_e \\h \\* CHARFORMAT " in instrs
+        or "REF eq_e \\h \\* CHARFORMAT " in instrs
     )
 
 

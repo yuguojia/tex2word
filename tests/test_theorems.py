@@ -85,5 +85,5 @@ def test_theorem_ref_is_plain_seq_reference():
     )
     root = document_root(convert_source(src).docx)
     instrs = "".join(t.text or "" for t in root.xpath("//w:instrText", namespaces=NS))
-    assert "REF t_1 \\h \\* CHARFORMAT" in instrs
+    assert "REF t_1 \\h \\* CHARFORMAT " in instrs
     assert "REF t_1 \\r" not in instrs  # not a paragraph-number ref

@@ -57,7 +57,7 @@ def test_section_ref_uses_paragraph_number_switch():
     src = r"\begin{document}\section{A}\label{sec:a}See \ref{sec:a}.\end{document}"
     root = document_root(convert_source(src).docx)
     instrs = "".join(t.text or "" for t in root.xpath("//w:instrText", namespaces=NS))
-    assert "REF sec_a \\r \\h \\* CHARFORMAT" in instrs
+    assert "REF sec_a \\r \\h \\* CHARFORMAT " in instrs
 
 
 def test_numbering_part_defines_heading_scheme():
