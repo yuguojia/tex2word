@@ -2847,9 +2847,14 @@ def parse_document(
     plugin_registry = load_plugins(plugins, base_dir=base_dir)
     directive_source = flatten_inputs(strip_comments(source), base_dir)
     processed = preprocess(source, base_dir)
+    expanded = expand_macros(
+        processed,
+        base_dir,
+        protected_names=plugin_registry.protected_macro_names,
+    )
     for transform in plugin_registry.source_preprocessors:
-        processed = transform(processed, base_dir, report)
-    expanded = replace_inline_tikz(expand_macros(processed, base_dir))
+        expanded = transform(expanded, base_dir, report)
+    expanded = replace_inline_tikz(expanded)
     body, preamble = _split_document(expanded)
     # \newtheorem declarations may live in a \usepackage'd local .sty (e.g. a
     # paper's MyPreamble.sty), which macro expansion harvests but doesn't inline;

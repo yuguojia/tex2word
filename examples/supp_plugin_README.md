@@ -20,9 +20,11 @@ from tex2word import convert_source
 result = convert_source(source, plugins=["examples/supp_plugin.py"])
 ```
 
-The plugin depends on the pure Python frontend. It rewrites its custom commands
-before normal tex2word parsing, so generated content can still contain ordinary
-LaTeX that tex2word understands.
+The plugin depends on the pure Python frontend. User-defined macros are expanded
+before the plugin rewrites its custom commands, so a macro such as
+`\newcommand{\marka}{\supp{a}}` still records `a`. Plugin commands registered
+with `registry.add_macro(...)` are protected from empty compatibility stubs such
+as `\providecommand{\supp}[1]{}`.
 
 ## Commands
 

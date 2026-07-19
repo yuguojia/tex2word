@@ -47,6 +47,47 @@ abc
     assert result.report.errors == []
 
 
+def test_plugin_preprocessor_runs_after_newcommand_expansion():
+    src = r"""
+\newcommand{\MarkSuppA}{\supp{a}}
+
+\begin{suppitem}{Figure}{a}
+abc
+\end{suppitem}
+
+\begin{document}
+\MarkSuppA
+\printsupp{Figure}
+\end{document}
+"""
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+
+    assert _paragraph_texts(result.document) == ["abc"]
+    assert result.report.errors == []
+
+
+def test_plugin_commands_survive_latex_compatibility_stubs():
+    src = r"""
+\providecommand{\supp}[1]{}
+\providecommand{\printsupp}[2][]{}
+
+\begin{suppitem}{Figure}{a}
+abc
+\end{suppitem}
+
+\begin{document}
+\supp{a}
+\printsupp{Figure}
+\end{document}
+"""
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+
+    assert _paragraph_texts(result.document) == ["abc"]
+    assert result.report.errors == []
+
+
 def test_suppitem_separator_can_be_configured_as_tex():
     src = r"""
 \begin{suppitem}{Figure}{c}
