@@ -13,6 +13,8 @@ The plugin supports:
     \importsupp{aaa.tmp}
     \suppitemsep{\newpage}
     \printsupp{Figure}
+    \sreffile{file.docx}
+    \sref{bookmarkname}
 
 By default, printed items are separated by a blank line. Use
     \suppitemsep{\newpage}
@@ -24,6 +26,11 @@ Use \exportsupp{aaa.tmp} in a source document to write the \supp order, then
 \importsupp{aaa.tmp} in another document to reuse that order when printing
 suppitem content. The file stores a JSON list of keys and is resolved relative
 to the current TeX base directory.
+
+Use \sreffile{file.docx} to set the external Word document used by \sref.
+\sref{bookmarkname} expands to a Word INCLUDETEXT field that pulls the named
+bookmark from that document. Relative paths are written as
+"{FILENAME \p}/relative/path.docx" so they resolve next to the current Word file.
 """
 
 from __future__ import annotations
@@ -43,6 +50,10 @@ def register(registry: PluginRegistry) -> None:
     registry.add_macro("suppitemsep", "{")
     registry.add_macro("suppitemseparator", "{")
     registry.add_macro("printsupp", "[{")
+    registry.add_macro("sref", "{")
+    registry.add_macro("sreffile", "{")
+    registry.add_macro("srefdoc", "{")
+    registry.add_macro("srefsource", "{")
     registry.add_preprocessor(preprocess_source)
 
 
@@ -53,7 +64,7 @@ def preprocess_source(source: str, base_dir: str, report: ConversionReport) -> s
     export_paths: list[str] = []
     source = _replace_order_macros(source, order, export_paths, base_dir, report)
     _write_exports(export_paths, order, base_dir, report)
-    return _replace_printsupp_macro(
+    source = _replace_printsupp_macro(
         source,
         lambda kind, sep: _render(
             kind,
@@ -63,6 +74,7 @@ def preprocess_source(source: str, base_dir: str, report: ConversionReport) -> s
             separator if sep is None else _normalize_separator(sep),
         ),
     )
+    return _replace_sref_macros(source, report)
 
 
 def _record(order: list[str], key: str) -> str:
@@ -250,6 +262,62 @@ def _find_next_macro(source: str, pos: int, names: tuple[str, ...]) -> tuple[int
                 best = (start, name)
             break
     return best
+
+
+def _replace_sref_macros(source: str, report: ConversionReport) -> str:
+    docx_file: str | None = None
+    setter_names = ("sreffile", "srefdoc", "srefsource")
+    handlers = (*setter_names, "sref")
+    out: list[str] = []
+    pos = 0
+    while True:
+        found = _find_next_macro(source, pos, handlers)
+        if found is None:
+            out.append(source[pos:])
+            break
+        start, name = found
+        marker_end = start + len(name) + 1
+        arg, end = _read_group(source, marker_end)
+        if end == marker_end:
+            out.append(source[pos:marker_end])
+            pos = marker_end
+            continue
+        out.append(source[pos:start])
+        value = arg.strip()
+        if name in setter_names:
+            docx_file = value
+        elif docx_file:
+            out.append(_sref_field(docx_file, value))
+        else:
+            report.warn("sref", f"\\sref{{{value}}} ignored: no \\sreffile{{...}} set")
+        pos = end
+    return "".join(out)
+
+
+def _sref_field(docx_file: str, bookmark: str) -> str:
+    return rf'\texwordfield{{INCLUDETEXT "{_field_quote(_field_path(docx_file))}" {bookmark} \!}}'
+
+
+def _field_path(path: str) -> str:
+    path = path.strip().replace("\\", "/")
+    if _is_relative_path(path):
+        return r"{FILENAME \p}/" + path
+    return path
+
+
+def _is_relative_path(path: str) -> bool:
+    if not path:
+        return True
+    if path.startswith(("/", "\\")):
+        return False
+    if "://" in path:
+        return False
+    drive, _ = os.path.splitdrive(path)
+    return not drive
+
+
+def _field_quote(value: str) -> str:
+    return value.replace('"', r'\"')
 
 
 def _replace_one_arg_macro(source: str, name: str, repl) -> str:

@@ -42,6 +42,11 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Custom native Word fields.** The new inline
+  `\texwordfield[cached result]{field instruction}` directive inserts any Word
+  field code (for example `DATE`, `DOCPROPERTY`, `IF` or `PAGE`) as a live
+  complex field. Unknown fields read from a foreign `.docx` are preserved as
+  the same directive when converted back to LaTeX.
 - **EndNote author–year citations.** `\\citet` and `\\textcite` now set
   `AuthorYear="1"` on every embedded EndNote `<Cite>` record, preserving their
   textual citation form when EndNote refreshes the document.

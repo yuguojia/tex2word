@@ -141,6 +141,44 @@ abc
     assert _paragraph_texts(result.document) == ["abc", "def", "xyz"]
 
 
+def test_sref_expands_to_include_text_word_field():
+    src = r"""
+\sreffile{../Image.png}
+\begin{document}
+See \sref{bookmarkname}.
+\end{document}
+"""
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+    para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
+    field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
+
+    assert field.code == r'INCLUDETEXT "{FILENAME \p}/../Image.png" bookmarkname \!'
+
+
+def test_sref_absolute_docx_path_stays_absolute():
+    src = r"""
+\srefdoc{C:/Users/UserName/My Documents/file.docx}
+\begin{document}
+\sref{bookmarkname}
+\end{document}
+"""
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+    para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
+    field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
+
+    assert field.code == r'INCLUDETEXT "C:/Users/UserName/My Documents/file.docx" bookmarkname \!'
+
+
+def test_sref_warns_without_configured_docx_file():
+    src = r"\begin{document}\sref{bookmarkname}\end{document}"
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+
+    assert any(entry.construct == "sref" for entry in result.report.warnings)
+
+
 def test_plugin_can_register_macro_signature(tmp_path):
     plugin = tmp_path / "eat_plugin.py"
     plugin.write_text(

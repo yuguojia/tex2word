@@ -546,6 +546,14 @@ class _Builder:
             return
         if name == "texwordcharstyle":
             return
+        if name == "texwordfield":
+            groups = _brace_groups(node)
+            code = _latex_of(groups[0]) if groups else ""
+            if code:
+                optional = _optional_group(node)
+                cached = _field_cached_text(self.inlines(optional)) if optional is not None else ""
+                out.append(ir.WordField(code=code, cached=cached))
+            return
         if name in ("textcolor", "colorbox", "fcolorbox"):
             self._inline_color(node, name, out)
             return
@@ -1745,6 +1753,23 @@ def _inlines_to_text(inlines: list[ir.Inline]) -> str:
     return " ".join(" ".join(out).split())
 
 
+def _field_cached_text(inlines: list[ir.Inline]) -> str:
+    """Flatten a field's cached-result argument without inserting extra spaces."""
+    out: list[str] = []
+    for node in inlines:
+        if isinstance(node, ir.Text):
+            out.append(node.value)
+        elif isinstance(node, ir.Emphasis | ir.CharStyle | ir.Link | ir.Colored | ir.FontSize):
+            out.append(_field_cached_text(node.inlines))
+        elif isinstance(node, ir.Math):
+            out.append(node.latex)
+        elif isinstance(node, ir.LineBreak):
+            out.append("\n")
+        elif isinstance(node, ir.RawInline):
+            out.append(node.latex)
+    return "".join(out).strip()
+
+
 def _walk_macros(nodes: list):
     for n in nodes:
         if isinstance(n, LatexMacroNode):
@@ -2417,6 +2442,9 @@ def _build_context(
             # tex2word-only: set a Word character style (one style-name arg; an
             # optional following group is consumed by the builder as content).
             MacroSpec("texwordcharstyle", "{"),
+            # tex2word-only: emit an arbitrary native Word field. The optional
+            # argument is the cached result shown before Word refreshes fields.
+            MacroSpec("texwordfield", "[{"),
             MacroSpec("DeclareFloatingEnvironment", "[{"),
             MacroSpec("newcounter", "{["),
             MacroSpec("addtocounter", "{{"),

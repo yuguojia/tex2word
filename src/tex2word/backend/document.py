@@ -1344,6 +1344,9 @@ class DocumentWriter:
         elif isinstance(node, ir.IndexEntry):
             for run in fields.index_entry(node.term):
                 p.append(run)
+        elif isinstance(node, ir.WordField):
+            for run in fields.field(node.code, node.cached):
+                p.append(run)
 
     def _comment(self, node: ir.Comment, p: _Element) -> None:
         self._comment_counter += 1

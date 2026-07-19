@@ -73,6 +73,8 @@ def register(registry):
     registry.add_macro("importsupp", "{")
     registry.add_macro("suppitemsep", "{")
     registry.add_macro("printsupp", "[{")
+    registry.add_macro("sreffile", "{")
+    registry.add_macro("sref", "{")
     registry.add_preprocessor(preprocess_source)
 
 
@@ -87,7 +89,11 @@ See `examples/supp_plugin.py` for a complete implementation of
 Its default item separator is a blank line; configure it with a TeX fragment
 such as `\suppitemsep{\newpage}`, or override one print call with
 `\printsupp[\newpage]{Figure}`. Export/import paths are resolved relative to
-the converted `.tex` file's base directory.
+the converted `.tex` file's base directory. `\sreffile{file.docx}` sets the
+external Word document for `\sref{bookmark}`, which emits a native
+`INCLUDETEXT` field via `\texwordfield`; relative files are written as
+`"{FILENAME \p}/relative/path.docx"` so Word resolves them next to the current
+document.
 
 ### Chinese / CJK documents (XeLaTeX)
 
@@ -201,6 +207,11 @@ The GUI depends on this package for the actual conversion, so everything in
   part (`Figure 1-1:`) can take a Word character style with
   `\texwordcaption{labelstyle}{Style Name}` or per-kind keys such as
   `\texwordcaption{figurelabelstyle}{Style Name}`.
+  Arbitrary native Word fields can be inserted inline with
+  `\texwordfield{DATE \@ "yyyy-MM-dd"}`; use the optional cached-result form
+  `\texwordfield[2026-07-19]{DATE \@ "yyyy-MM-dd"}` when a placeholder should
+  be visible before Word refreshes fields. For pdfLaTeX compatibility, declare
+  `\providecommand{\texwordfield}[2][]{}` in the source preamble.
 - **Table of contents** ★: `\tableofcontents` → a live Word `TOC` field (rebuilds
   from heading styles on refresh); `\listoffigures`/`\listoftables` → caption-
   sequence lists. Schema-valid and round-tripping.

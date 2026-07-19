@@ -682,6 +682,11 @@ class _Reader:
         if m:
             out.append(ir.Link([ir.Text(result or m.group(1))], m.group(1)))
             return
+        m = re.match(r'HYPERLINK\s+\\l\s+"([^"]*)"', instr)
+        if m:
+            anchor = self._resolve_label(m.group(1))
+            out.append(ir.Link([ir.Text(result or anchor)], "", anchor=anchor))
+            return
         if "CSL_CITATION" in instr:  # Zotero (ZOTERO_ITEM) or Mendeley (bare)
             out.append(self._csl_cite(instr, result))
             return
@@ -690,8 +695,9 @@ class _Reader:
             return
         if instr.startswith("SEQ"):
             return  # a regenerated number; drop
-        if result:
-            out.append(ir.Text(result))
+        # Preserve every other complex field as a first-class custom field so a
+        # foreign docx can round-trip PAGE/DATE/DOCPROPERTY/IF/etc. losslessly.
+        out.append(ir.WordField(instr, result))
 
     def _csl_cite(self, instr: str, result: str) -> ir.Cite:
         """A Zotero/Mendeley ``…CSL_CITATION {…}`` field → ``ir.Cite``."""
