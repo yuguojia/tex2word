@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tex2word import convert_source, ir
@@ -98,6 +99,46 @@ def
         ir.PageBreak,
         ir.Paragraph,
     ]
+
+
+def test_exports_and_imports_supp_order_between_files(tmp_path):
+    plugin = str(ROOT / "examples" / "supp_plugin.py")
+    main = r"""
+\exportsupp{aaa.tmp}
+\begin{document}
+\supp{a}
+\supp{b}
+\supp{c}
+\end{document}
+"""
+
+    convert_source(main, base_dir=str(tmp_path), plugins=[plugin])
+
+    order_file = tmp_path / "aaa.tmp"
+    assert json.loads(order_file.read_text(encoding="utf-8")) == ["a", "b", "c"]
+
+    supp = r"""
+\begin{suppitem}{Table}{b}
+xyz
+\end{suppitem}
+
+\begin{suppitem}{Figure}{c}
+def
+\end{suppitem}
+
+\begin{suppitem}{Figure}{a}
+abc
+\end{suppitem}
+
+\importsupp{aaa.tmp}
+\begin{document}\printsupp{Figure}
+\printsupp{Table}
+\end{document}
+"""
+
+    result = convert_source(supp, base_dir=str(tmp_path), plugins=[plugin])
+
+    assert _paragraph_texts(result.document) == ["abc", "def", "xyz"]
 
 
 def test_plugin_can_register_macro_signature(tmp_path):
