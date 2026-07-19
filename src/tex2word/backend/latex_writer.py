@@ -142,6 +142,10 @@ class LatexWriter:
             lines.append("\\usepackage{natbib}")
         if feat.index:
             lines += ["\\usepackage{makeidx}", "\\makeindex"]
+        if feat.word_fields:
+            # A no-op compatibility definition keeps the reconstructed source
+            # compilable in ordinary LaTeX while tex2word preserves its uses.
+            lines.append("\\providecommand{\\texwordfield}[2][]{}")
         for env, display in sorted(feat.theorem_kinds.items()):
             if env != "proof":
                 lines.append(f"\\newtheorem{{{env}}}{{{display}}}")
@@ -381,7 +385,8 @@ class LatexWriter:
             cmd = _EMPH_CMD.get(node.kind_, "emph")
             return f"\\{cmd}{{{self._inlines(node.inlines)}}}"
         if isinstance(node, ir.CharStyle):
-            return f"\\texwordcharstyle{{{latex_escape(node.style)}}}{{{self._inlines(node.inlines)}}}"
+            content = self._inlines(node.inlines)
+            return f"\\texwordcharstyle{{{latex_escape(node.style)}}}{{{content}}}"
         if isinstance(node, ir.Math):
             return f"${node.latex}$"
         if isinstance(node, ir.DisplayMath):
@@ -403,6 +408,11 @@ class LatexWriter:
             return f"\\endnote{{{self._inlines(node.inlines)}}}"
         if isinstance(node, ir.IndexEntry):
             return f"\\index{{{node.term}}}"
+        if isinstance(node, ir.WordField):
+            # Braces inside the optional argument protect a literal closing
+            # bracket in the cached text from ending the argument early.
+            cached = f"[{{{latex_escape(node.cached)}}}]" if node.cached else ""
+            return f"\\texwordfield{cached}{{{node.code}}}"
         if isinstance(node, ir.Colored):
             inner = self._inlines(node.inlines)
             if node.bg is not None:
@@ -462,6 +472,7 @@ class _Features:
         self.math = self.graphics = self.subfig = self.booktabs = False
         self.multirow = self.algorithm = self.links = self.refs = False
         self.cleveref = self.cites = self.index = False
+        self.word_fields = False
         self.theorem_kinds: dict[str, str] = {}
         self.custom_floats: dict[str, str] = {}
 
@@ -516,6 +527,8 @@ def _scan_inlines(inlines: list, feat: _Features) -> None:
             feat.graphics = True
         elif isinstance(node, ir.IndexEntry):
             feat.index = True
+        elif isinstance(node, ir.WordField):
+            feat.word_fields = True
         elif isinstance(
             node,
             ir.Emphasis | ir.CharStyle | ir.Footnote | ir.Endnote | ir.Colored | ir.FontSize,

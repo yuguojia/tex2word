@@ -400,6 +400,7 @@ def _reconcile_para_run(
 # keys) is always taken from the manifest, never the lossy read-back.
 _MERGE_SEMANTIC = (
     ir.Math, ir.DisplayMath, ir.Footnote, ir.Endnote, ir.Image, ir.Cite,
+    ir.WordField,
 )
 # inline nodes that inject prose on read-back (a cleveref ``\cref`` renders a literal
 # "fig. "/"Theorem " prefix) or that the reader can't represent faithfully -> we
@@ -475,6 +476,7 @@ def _split_semantic(inlines: list) -> tuple[list[list], list]:
 _UNRELIABLE = (
     ir.Math, ir.DisplayMath, ir.Cite, ir.Ref, ir.Footnote, ir.Endnote, ir.Image,
     ir.RawInline, ir.IndexEntry,
+    ir.WordField,
 )
 
 

@@ -169,6 +169,18 @@ class IndexEntry(Node):
 
 
 @dataclass
+class WordField(Node):
+    """An arbitrary native Word field inserted by ``\\texwordfield``.
+
+    ``code`` is the field instruction written to ``w:instrText``; ``cached`` is
+    the result displayed until Word refreshes the field.
+    """
+
+    code: str
+    cached: str = ""
+
+
+@dataclass
 class Colored(Node):
     """Coloured inline content: ``fg`` text colour and/or ``bg`` shading.
 
@@ -227,7 +239,7 @@ class Image(Node):
 Inline = (
     Text | Emphasis | CharStyle | Math | DisplayMath | Ref | Cite | Link | LineBreak
     | Footnote | Endnote | Colored | FontSize | Image | RawInline | Comment
-    | IndexEntry
+    | IndexEntry | WordField
 )
 
 

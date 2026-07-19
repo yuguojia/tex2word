@@ -43,6 +43,7 @@ _TEXWORD_DIRECTIVES = frozenset({
     "texwordparstyle",
     "texwordcharstyle",
     "texwordcaption",
+    "texwordfield",
 })
 
 
