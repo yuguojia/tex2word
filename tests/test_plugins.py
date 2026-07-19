@@ -197,6 +197,21 @@ See \sref{bookmarkname}.
     assert field.code == r'INCLUDETEXT "{FILENAME \p}/../Image.png" bookmarkname \!'
 
 
+def test_sref_sanitizes_label_like_bookmark_name():
+    src = r"""
+\sreffile{supplement.docx}
+\begin{document}
+See \sref{fig:demo}.
+\end{document}
+"""
+
+    result = convert_source(src, plugins=[str(ROOT / "examples" / "supp_plugin.py")])
+    para = next(block for block in result.document.blocks if isinstance(block, ir.Paragraph))
+    field = next(inline for inline in para.inlines if isinstance(inline, ir.WordField))
+
+    assert field.code == r'INCLUDETEXT "{FILENAME \p}/supplement.docx" fig_demo \!'
+
+
 def test_sref_absolute_docx_path_stays_absolute():
     src = r"""
 \srefdoc{C:/Users/UserName/My Documents/file.docx}

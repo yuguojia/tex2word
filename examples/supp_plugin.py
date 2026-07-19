@@ -40,6 +40,7 @@ import os
 
 from tex2word import PluginRegistry
 from tex2word.report import ConversionReport
+from tex2word.transforms.crossref import sanitize_bookmark
 
 
 def register(registry: PluginRegistry) -> None:
@@ -295,7 +296,10 @@ def _replace_sref_macros(source: str, report: ConversionReport) -> str:
 
 
 def _sref_field(docx_file: str, bookmark: str) -> str:
-    return rf'\texwordfield{{INCLUDETEXT "{_field_quote(_field_path(docx_file))}" {bookmark} \!}}'
+    return (
+        rf'\texwordfield{{INCLUDETEXT "{_field_quote(_field_path(docx_file))}" '
+        rf"{sanitize_bookmark(bookmark)} \!}}"
+    )
 
 
 def _field_path(path: str) -> str:
