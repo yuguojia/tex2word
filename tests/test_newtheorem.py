@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import re
+import zipfile
+
 from tex2word import convert_source
+from tex2word.backend.caption_config import CaptionConfig
+from tex2word.backend.latex_writer import write_latex
 from tex2word.validate import validate_docx
 
 SRC = r"""
@@ -22,10 +28,25 @@ def _theorems(doc):
     return [b for b in doc.blocks if type(b).__name__ == "Theorem"]
 
 
+def _document_xml(docx: bytes) -> str:
+    return zipfile.ZipFile(io.BytesIO(docx)).read("word/document.xml").decode()
+
+
+def _visible_text(docx: bytes) -> str:
+    return "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", _document_xml(docx)))
+
+
 def test_custom_theorem_display_names():
     thms = _theorems(convert_source(SRC).document)
     kinds = [t.kind for t in thms]
     assert kinds == ["Theorem", "My Lemma", "Remark"]
+
+
+def test_custom_theorem_environment_name_round_trips_to_latex():
+    doc = convert_source(SRC).document
+    latex = write_latex(doc)
+    assert r"\newtheorem{mylem}{My Lemma}" in latex
+    assert r"\begin{mylem}[Euclid]" in latex
 
 
 def test_custom_theorem_numbering():
@@ -43,6 +64,64 @@ def test_custom_theorem_optional_title():
     lemma = next(t for t in thms if t.kind == "My Lemma")
     assert lemma.title is not None
     assert "Euclid" in "".join(getattr(x, "value", "") for x in lemma.title)
+
+
+def test_texwordcaption_formats_custom_theorem_environment():
+    src = r"""
+\documentclass{article}
+\newtheorem{note}{Note}
+\texwordcaption{notelabel}{Note S}
+\texwordcaption{noteseq}{Note}
+\texwordcaption{notelabelsep}{}
+\texwordcaption{notedelim}{. }
+\begin{document}
+\begin{note}\label{note:a}Title. Body.\end{note}
+See \ref{note:a}.
+\end{document}
+"""
+    res = convert_source(src)
+    xml = _document_xml(res.docx)
+    text = _visible_text(res.docx)
+    theorem = _theorems(res.document)[0]
+    assert theorem.env == "note"
+    assert res.document.meta.custom_theorems == {"note": "Note"}
+    assert "Note S1. Title. Body." in text
+    assert "SEQ Note" in xml
+    assert "SEQ Note S" not in xml
+    assert "REF note_a" in xml
+    assert validate_docx(res.docx) == []
+
+
+def test_texwordcaption_formats_custom_theorem_optional_title():
+    src = r"""
+\documentclass{article}
+\newtheorem{note}{Note}
+\texwordcaption{notelabel}{Note S}
+\texwordcaption{notelabelsep}{}
+\texwordcaption{notetitleopen}{. }
+\texwordcaption{notetitleclose}{}
+\texwordcaption{notedelim}{. }
+\begin{document}
+\begin{note}[Title]Body.\end{note}
+\end{document}
+"""
+    text = _visible_text(convert_source(src).docx)
+    assert "Note S1. Title. Body." in text
+
+
+def test_custom_theorem_caption_config_keeps_empty_format_values():
+    cfg = (
+        CaptionConfig.english()
+        .with_custom_theorems({"note": "Note"})
+        .with_overrides({
+            "notelabelsep": "",
+            "notetitleclose": "",
+            "notelabelstyle": "Note Lead",
+        })
+    )
+    assert cfg.theorem_value("note", "labelsep", " ") == ""
+    assert cfg.theorem_value("note", "titleclose", ")") == ""
+    assert cfg.theorem_value("note", "style", "") == "Note Lead"
 
 
 def test_custom_theorem_body_and_valid():

@@ -940,6 +940,44 @@ def test_texwordcaption_algorithm_labelstyle(tmp_path):
     assert ">Algo<" in doc
 
 
+def test_texwordstyle_custom_theorem_caption_styles_whole_paragraph(tmp_path):
+    ref = tmp_path / "template.docx"
+    ref.write_bytes(_reference_docx())
+    src = r"""
+\newtheorem{note}{Note}
+\texwordcaption{notelabel}{Note S}
+\texwordcaption{notelabelsep}{}
+\texwordcaption{notedelim}{. }
+\texwordcaption{notelabelstyle}{关键词}
+\texwordstyle{notecaption}{表注}
+\begin{document}
+\begin{note}Title. Body.\end{note}
+\end{document}
+"""
+    root = etree.fromstring(
+        _part(convert_source(src, reference_doc=str(ref)).docx, "word/document.xml")
+    )
+    note = next(
+        p for p in root.findall(f".//{{{_W}}}p")
+        if "Title. Body." in "".join(t.text or "" for t in p.iter(f"{{{_W}}}t"))
+    )
+    pstyle = note.find(f"{{{_W}}}pPr/{{{_W}}}pStyle")
+    assert pstyle is not None and pstyle.get(f"{{{_W}}}val") == "tcap"
+
+    def run_style(run):
+        rstyle = run.find(f"{{{_W}}}rPr/{{{_W}}}rStyle")
+        return rstyle.get(f"{{{_W}}}val") if rstyle is not None else None
+
+    styled_text = [
+        ("".join(t.text or "" for t in run.iter(f"{{{_W}}}t")), run_style(run))
+        for run in note.findall(f"{{{_W}}}r")
+    ]
+    assert ("Note S", "kw") in styled_text
+    assert ("1", "kw") in styled_text
+    assert (". ", "kw") in styled_text
+    assert ("Title. Body.", None) in styled_text
+
+
 def test_generic_paragraph_style_autodiscovered_by_name(tmp_path):
     # no \texwordstyle: a template style named like the role is found automatically.
     ref = tmp_path / "template.docx"

@@ -100,6 +100,11 @@ class CaptionConfig:
     label_styles: dict[str, str] = field(default_factory=dict)
     #: custom float environment name -> canonical caption/SEQ kind.
     custom_kinds: dict[str, str] = field(default_factory=dict)
+    #: custom theorem environment name -> its default displayed lead.
+    custom_theorems: dict[str, str] = field(default_factory=dict)
+    #: per-custom-theorem formatting populated from environment-prefixed
+    #: ``\texwordcaption`` keys (e.g. ``notelabelsep`` / ``notetitleopen``).
+    theorem_formats: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @classmethod
     def english(cls) -> CaptionConfig:
@@ -162,11 +167,15 @@ class CaptionConfig:
         seq_names = dict(self.seq_names)
         label_styles = dict(self.label_styles)
         custom_kinds = dict(self.custom_kinds)
+        theorem_formats = {
+            env: dict(options) for env, options in self.theorem_formats.items()
+        }
         label_number_sep = self.label_number_sep
         section_sep = self.section_sep
         delim = self.delim
         eq_open, eq_close = self.eq_wrap
         custom_key_map = self._custom_override_key_map(custom_kinds)
+        theorem_key_map = self._theorem_override_key_map(self.custom_theorems)
         for key, value in overrides.items():
             if key in _LABEL_KEYS:
                 labels[_LABEL_KEYS[key]] = value
@@ -182,6 +191,11 @@ class CaptionConfig:
                     seq_names[counter] = value
                 elif prop == "style":
                     label_styles[counter] = value.strip()
+            elif key in theorem_key_map:
+                prop, env = theorem_key_map[key]
+                theorem_formats.setdefault(env, {})[prop] = (
+                    value.strip() if prop == "style" else value
+                )
             elif key == "labelsep":
                 label_number_sep = value
             elif key == "sectionsep":
@@ -196,6 +210,7 @@ class CaptionConfig:
         return replace(
             self, labels=labels, ref_names=ref_names, seq_names=seq_names,
             label_styles=label_styles, custom_kinds=custom_kinds,
+            theorem_formats=theorem_formats,
             label_number_sep=label_number_sep,
             section_sep=section_sep, delim=delim, eq_wrap=(eq_open, eq_close),
         )
@@ -224,6 +239,31 @@ class CaptionConfig:
             self, labels=labels, ref_names=ref_names, custom_kinds=custom_kinds
         )
 
+    def with_custom_theorems(self, kinds: dict[str, str]) -> CaptionConfig:
+        """Register environments declared by ``\\newtheorem``.
+
+        Registration makes environment-prefixed ``\\texwordcaption`` keys
+        available without changing the traditional theorem formatting until an
+        override is supplied.
+        """
+        if not kinds:
+            return self
+        custom_theorems = dict(self.custom_theorems)
+        theorem_formats = {
+            env: dict(options) for env, options in self.theorem_formats.items()
+        }
+        for env, display in kinds.items():
+            env_key = env.strip().lower()
+            if not env_key:
+                continue
+            custom_theorems[env_key] = display
+            theorem_formats.setdefault(env_key, {})
+        return replace(
+            self,
+            custom_theorems=custom_theorems,
+            theorem_formats=theorem_formats,
+        )
+
     @staticmethod
     def _custom_override_key_map(
         custom_kinds: dict[str, str]
@@ -238,6 +278,37 @@ class CaptionConfig:
             out[f"{prefix}labelstyle"] = ("style", counter)
             out[f"{prefix}identifierstyle"] = ("style", counter)
         return out
+
+    @staticmethod
+    def _theorem_override_key_map(
+        custom_theorems: dict[str, str],
+    ) -> dict[str, tuple[str, str]]:
+        """Map ``note...`` keys to a theorem-format property and environment."""
+        out: dict[str, tuple[str, str]] = {}
+        properties = {
+            "label": "label",
+            "seq": "seq",
+            "labelsep": "labelsep",
+            "titleopen": "titleopen",
+            "titleclose": "titleclose",
+            "delim": "delim",
+            "labelstyle": "style",
+            "identifierstyle": "style",
+        }
+        for env in custom_theorems:
+            prefix = caption_key_prefix(env)
+            if not prefix:
+                continue
+            for suffix, prop in properties.items():
+                out[f"{prefix}{suffix}"] = (prop, env)
+        return out
+
+    def theorem_value(self, env: str | None, prop: str, default: str) -> str:
+        """Return one formatting value for a custom theorem environment."""
+        if not env:
+            return default
+        options = self.theorem_formats.get(env.strip().lower(), {})
+        return options[prop] if prop in options else default
 
     def label(self, counter: str) -> str:
         """Displayed label word for a SEQ ``counter`` (falls back to the name)."""

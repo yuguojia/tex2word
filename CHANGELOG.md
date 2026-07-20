@@ -42,6 +42,15 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Per-environment theorem lead formatting.** Custom environments declared by
+  `\newtheorem` can now use environment-prefixed `\texwordcaption` keys such as
+  `notelabel`, `noteseq`, `notelabelsep`, `notetitleopen`, `notetitleclose`,
+  `notedelim`, and `notelabelstyle`. This supports leads such as
+  `Note S{ SEQ Note }. Title.` while keeping live Word numbering and references.
+  `\texwordstyle{notecaption}{...}` can bind the entire paragraph containing the
+  generated lead and first body paragraph to a paragraph style from the reference
+  doc, parallel to `figurecaption`; `notelabelstyle` remains the character-style
+  control for only the generated identifier.
 - **Custom native Word fields.** The new inline
   `\texwordfield[cached result]{field instruction}` directive inserts any Word
   field code (for example `DATE`, `DOCPROPERTY`, `IF` or `PAGE`) as a live
@@ -301,6 +310,10 @@ those documents surfaced.
   | `equationseq` / `algorithmseq` | equation/algorithm SEQ identifier | `公式` / `算法` | `SEQ 公式` field name |
   | `labelstyle` / `identifierstyle` | character style for the displayed caption identifier | `Caption Label` | styles `Figure 1-1:` only |
   | `figurelabelstyle` / `tablelabelstyle` / `algorithmlabelstyle` | per-kind caption identifier character style | `图题编号` | overrides `labelstyle` for that kind |
+  | `<env>label` / `<env>seq` | displayed label and SEQ identifier for a custom `\newtheorem` environment | `notelabel` = `Note S`; `noteseq` = `Note` | `Note S{ SEQ Note }` |
+  | `<env>labelsep` / `<env>delim` | text between label/number and after the generated theorem lead | `notelabelsep` = empty; `notedelim` = `. ` | `Note S1. Title.` |
+  | `<env>titleopen` / `<env>titleclose` | text around a custom theorem's optional `[title]` | `notetitleopen` = `. `; `notetitleclose` = empty | `Note S1. Title.` instead of `Note 1 (Title).` |
+  | `<env>labelstyle` / `<env>identifierstyle` | character style for only the custom theorem's generated identifier | `notelabelstyle` = `Note Label` | styles `Note S1.` without styling its body text |
   | `labelsep` | gap between label and number | `` (empty) | `图1` vs `Figure 1` |
   | `sectionsep` | chapter/number separator | `.` | `图1.1` instead of `图1-1` |
   | `delim` | text before the caption | `：` | `图1-1：说明` |
@@ -384,6 +397,7 @@ those documents surfaced.
   | `tablecaption` | table captions (overrides `caption`) | explicit only |
   | `subfigurecaption` | sub-figure `(a)`/`(b)` captions (overrides `caption`) | explicit only |
   | `algorithmcaption` | algorithm captions (overrides `caption`) | explicit only |
+  | `<env>caption` | paragraph containing a custom `\newtheorem` environment's generated lead and first body paragraph (for example `notecaption` styles `Note S1. Title.`) | explicit only |
   | `heading1*`..`heading5*` | unnumbered heading levels 1–5, regardless of source command | explicit only |
   | `chapter*` | unnumbered `\chapter*` headings (level 1) | explicit only |
   | `section*` | unnumbered `\section*` headings (level 1 in `article`, level 2 in `book`/`report`) | explicit only |

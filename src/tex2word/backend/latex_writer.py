@@ -345,7 +345,7 @@ class LatexWriter:
         return "\n".join(line for line in lines if line)
 
     def _theorem(self, block: ir.Theorem) -> str:
-        env = "proof" if block.kind == "Proof" else block.kind.lower()
+        env = block.env or ("proof" if block.kind == "Proof" else block.kind.lower())
         title = f"[{self._inlines(block.title)}]" if block.title else ""
         label = f"\\label{{{block.label}}}\n" if block.label else ""
         return (
@@ -497,7 +497,7 @@ def _scan(blocks: list[ir.Block], feat: _Features) -> None:  # noqa: C901
         elif isinstance(block, ir.Algorithm):
             feat.algorithm = True
         elif isinstance(block, ir.Theorem):
-            env = "proof" if block.kind == "Proof" else block.kind.lower()
+            env = block.env or ("proof" if block.kind == "Proof" else block.kind.lower())
             feat.theorem_kinds[env] = block.kind
             _scan(block.blocks, feat)
         elif isinstance(block, ir.Quote):

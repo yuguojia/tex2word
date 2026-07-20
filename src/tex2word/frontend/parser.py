@@ -1326,7 +1326,9 @@ class _Builder:
         # a shared-counter env (\newtheorem{LEM}[THM]{Lemma}) numbers against the
         # counter it shares (THM's "Theorem"), so they form one running sequence.
         counter = None if unnumbered else self.theorem_counters.get(base, display)
-        theorem = ir.Theorem(kind=display, blocks=[], title=title, counter=counter)
+        theorem = ir.Theorem(
+            kind=display, blocks=[], title=title, counter=counter, env=base
+        )
         # become the label target *before* parsing the body, so a \label at the
         # start of the environment attaches here, not to the preceding block.
         self._labelable = theorem
@@ -2892,6 +2894,7 @@ def parse_document(
     blocks = builder.blocks(nodes)
     doc = ir.Document(blocks=blocks, meta=builder.meta, book=builder.book_mode)
     doc.meta.custom_floats.update(custom_floats)
+    doc.meta.custom_theorems.update(custom_theorems)
 
     _fill_meta_from_preamble(doc, preamble, ctx, report)
     _collect_bib_resources(preamble, builder)  # biblatex \addbibresource (preamble)
@@ -3027,13 +3030,29 @@ def _detect_style_overrides(doc: ir.Document, source: str) -> None:
     template's three-line border format takes effect. The pipeline resolves each name
     to the template's styleId and
     applies it; an unbound generic role is auto-discovered by name in the template.
-    Unknown roles are ignored.
+    A custom theorem environment declared as ``\newtheorem{note}{...}`` also
+    gets a ``notecaption`` paragraph-style role for the paragraph containing
+    its generated lead and first body paragraph. Unknown roles are ignored.
     """
+    theorem_roles = _custom_theorem_caption_roles(doc.meta.custom_theorems)
     for m in _STYLE_OVERRIDE_RE.finditer(source):
         role = m.group(1).strip().lower()
         name = m.group(2).strip()
         if role in _STYLE_OVERRIDE_ROLES and name:
             doc.meta.style_overrides[role] = name
+        elif role in theorem_roles and name:
+            doc.meta.style_overrides[role] = name
+
+
+def _custom_theorem_caption_roles(custom_theorems: dict[str, str]) -> dict[str, str]:
+    """Map custom ``notecaption`` roles to their theorem environment names."""
+    roles: dict[str, str] = {}
+    for env in custom_theorems:
+        prefix = _caption_key_prefix(env)
+        if not prefix:
+            continue
+        roles[f"{prefix}caption"] = env.strip().lower()
+    return roles
 
 
 def _detect_noindent_style(source: str) -> str | None:
@@ -3060,11 +3079,16 @@ def _detect_caption_overrides(doc: ir.Document, source: str) -> None:
     the displayed caption identifier; ``labelsep`` the gap between label and number;
     ``sectionsep`` the chapter/number separator (e.g. ``-`` for "1-1");
     ``delim`` the text before the caption; ``eqopen``/``eqclose`` the equation
-    parentheses. The value is kept verbatim (spaces are significant), so e.g.
+    parentheses. A custom ``\newtheorem{note}{...}`` additionally accepts
+    ``notelabel``/``noteseq``/``notelabelsep``/``notetitleopen``/
+    ``notetitleclose``/``notedelim`` and label-style aliases. The value is kept
+    verbatim (spaces are significant), so e.g.
     ``\\texwordcaption{delim}{ - }`` keeps the surrounding spaces. Unknown keys
     are ignored.
     """
-    custom_keys = _custom_caption_override_keys(doc.meta.custom_floats)
+    custom_keys = _custom_caption_override_keys(
+        doc.meta.custom_floats, doc.meta.custom_theorems
+    )
     for m in _CAPTION_OVERRIDE_RE.finditer(source):
         key = m.group(1).strip().lower()
         if key in _CAPTION_OVERRIDE_KEYS or key in custom_keys:
@@ -3075,7 +3099,9 @@ def _caption_key_prefix(name: str) -> str:
     return "".join(ch for ch in name.lower() if ch.isalnum())
 
 
-def _custom_caption_override_keys(custom_floats: dict[str, str]) -> set[str]:
+def _custom_caption_override_keys(
+    custom_floats: dict[str, str], custom_theorems: dict[str, str]
+) -> set[str]:
     keys: set[str] = set()
     for env in custom_floats:
         prefix = _caption_key_prefix(env)
@@ -3084,6 +3110,20 @@ def _custom_caption_override_keys(custom_floats: dict[str, str]) -> set[str]:
         keys.update({
             f"{prefix}label",
             f"{prefix}seq",
+            f"{prefix}labelstyle",
+            f"{prefix}identifierstyle",
+        })
+    for env in custom_theorems:
+        prefix = _caption_key_prefix(env)
+        if not prefix:
+            continue
+        keys.update({
+            f"{prefix}label",
+            f"{prefix}seq",
+            f"{prefix}labelsep",
+            f"{prefix}titleopen",
+            f"{prefix}titleclose",
+            f"{prefix}delim",
             f"{prefix}labelstyle",
             f"{prefix}identifierstyle",
         })

@@ -64,6 +64,7 @@ class DocumentWriter:
         part_style_id: str | None = None,
         figure_style_id: str | None = None,
         caption_style_ids: dict[str, str | None] | None = None,
+        theorem_style_ids: dict[str, str] | None = None,
         table_text_style_id: str | None = None,
         threeline_table_style_id: str | None = None,
         body_style_id: str | None = None,
@@ -93,6 +94,9 @@ class DocumentWriter:
         #: \texwordstyle caption overrides keyed by kind ("Figure"/"Table"/
         #: "subfigure"/"Algorithm"); each None falls back to the built-in Caption.
         self._caption_style_ids = caption_style_ids or {}
+        #: custom theorem environment -> paragraph style for the paragraph that
+        #: contains its generated lead and first body paragraph.
+        self._theorem_style_ids = theorem_style_ids or {}
         #: \texwordstyle{table} override for the text inside table cells (else Normal).
         self._table_text_style = table_text_style_id or "Normal"
         #: \texwordstyle{threelinetable} Word table style applied to a 三线表 (a
@@ -1179,7 +1183,8 @@ class DocumentWriter:
 
     def _theorem(self, block: ir.Theorem, body: _Element) -> None:
         blocks = block.blocks or [ir.Paragraph([])]
-        p = self._styled_paragraph("Normal")
+        env = (block.env or "").strip().lower()
+        p = self._styled_paragraph(self._theorem_style_ids.get(env, "Normal"))
         self._write_theorem_prefix(block, p)
         if isinstance(blocks[0], ir.Paragraph):
             self._inlines(blocks[0].inlines, p)
@@ -1196,24 +1201,40 @@ class DocumentWriter:
         is_proof = block.kind == "Proof"
         emphasis = "italic" if is_proof else "bold"
         flag = {emphasis: True}
-        p.append(self._run(block.kind, **flag))  # type: ignore[arg-type]
+        cfg = self.caption_cfg
+        theorem_label = cfg.theorem_value(block.env, "label", block.kind)
+        label_style_name = cfg.theorem_value(block.env, "style", "")
+        label_style = self._char_style(label_style_name)
+        label_kw = {"char_style": label_style} if label_style else flag
+        p.append(self._run(theorem_label, **label_kw))  # type: ignore[arg-type]
         if block.counter:
-            p.append(self._run(" ", **flag))  # type: ignore[arg-type]
+            label_sep = cfg.theorem_value(block.env, "labelsep", " ")
+            p.append(self._run(label_sep, **label_kw))  # type: ignore[arg-type]
             start = None
             if block.label:
                 start = fields.bookmark_start(_bookmark_for(block.label))
                 p.append(start)
-            for run in fields.number_field(block.counter, self.number_by_section,
-                                           self.caption_cfg.section_sep):
+            counter = cfg.theorem_value(block.env, "seq", block.counter)
+            for run in fields.number_field(
+                counter, self.number_by_section, cfg.section_sep
+            ):
+                _set_run_char_style(run, label_style)
                 p.append(run)
             if start is not None:
                 p.append(fields.bookmark_end_for(start))
         if block.title:
-            p.append(self._run(" ("))
+            title_open = cfg.theorem_value(block.env, "titleopen", " (")
+            title_close = cfg.theorem_value(block.env, "titleclose", ")")
+            p.append(self._run(title_open, char_style=label_style))
             for t in block.title:
-                self._inline_styled(t, p, emphasis)
-            p.append(self._run(")"))
-        p.append(self._run(". ", **flag))  # type: ignore[arg-type]
+                if label_style is None:
+                    self._inline_styled(t, p, emphasis)
+                else:
+                    self._inline(t, p)
+            p.append(self._run(title_close))
+        delim = cfg.theorem_value(block.env, "delim", ". ")
+        delim_kw = label_kw if not block.title else flag
+        p.append(self._run(delim, **delim_kw))  # type: ignore[arg-type]
 
     def _append_qed(self, body: _Element) -> None:
         last = body[-1]

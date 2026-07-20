@@ -398,6 +398,8 @@ class Theorem(Node):
 
     ``kind`` is the display name ("Theorem", "Lemma", "Proof", ...). ``counter``
     is the SEQ counter name for numbered kinds (None for unnumbered, e.g. proof).
+    ``env`` retains the LaTeX environment name so per-environment
+    ``\\texwordcaption`` formatting can be applied by the Word back-end.
     """
 
     kind: str
@@ -405,6 +407,7 @@ class Theorem(Node):
     title: list[Inline] | None = None
     label: str | None = None
     counter: str | None = None
+    env: str | None = None
 
 
 @dataclass
@@ -509,6 +512,10 @@ class DocumentMeta(Node):
     # Custom floats declared via \DeclareFloatingEnvironment: environment name ->
     # displayed counter/caption kind (e.g. "scheme" -> "Scheme").
     custom_floats: dict[str, str] = field(default_factory=dict)
+    # Custom theorem-like environments declared via \newtheorem: environment name
+    # -> displayed lead (e.g. "note" -> "Note").  This lets \texwordcaption
+    # apply formatting overrides to the environment by its stable LaTeX name.
+    custom_theorems: dict[str, str] = field(default_factory=dict)
     # \texwordtemplate{path.docx}: in-source Word reference template, resolved
     # relative to the .tex file. The CLI --reference-doc option takes priority.
     template_doc: str | None = None
