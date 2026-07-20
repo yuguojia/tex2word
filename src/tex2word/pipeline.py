@@ -113,9 +113,14 @@ def convert_source(
     has_cjk_font = bool(
         doc.meta.cjk_main_font or doc.meta.cjk_sans_font or doc.meta.cjk_mono_font
     )
-    caption_config = CaptionConfig.from_locale(
-        caption_locale, doc.meta.language, has_cjk_font=has_cjk_font,
-    ).with_custom_kinds(doc.meta.custom_floats).with_overrides(doc.meta.caption_overrides)
+    caption_config = (
+        CaptionConfig.from_locale(
+            caption_locale, doc.meta.language, has_cjk_font=has_cjk_font,
+        )
+        .with_custom_kinds(doc.meta.custom_floats)
+        .with_custom_theorems(doc.meta.custom_theorems)
+        .with_overrides(doc.meta.caption_overrides)
+    )
     # In a Chinese document, directly-typed curly quotes (“”‘’) get an East-Asian
     # font hint so Word renders them with the CJK font (full-width quotes); quotes
     # from LaTeX commands stay English. Same "is Chinese" test as the caption locale.
@@ -147,6 +152,7 @@ def convert_source(
         part_style_id=roles.part,
         figure_style_id=roles.figure,
         caption_style_ids=roles.caption_styles(),
+        theorem_style_ids=roles.theorem_captions,
         table_text_style_id=roles.table_text,
         threeline_table_style_id=roles.threeline_table,
         body_style_id=roles.body,
@@ -364,6 +370,8 @@ class _RoleStyles:
     figure: str | None = None  # the image-line paragraph style
     caption: str | None = None  # default caption style
     captions: dict = field(default_factory=dict)  # caption kind -> styleId (per type)
+    # custom theorem environment -> paragraph styleId for its lead/body paragraph.
+    theorem_captions: dict[str, str] = field(default_factory=dict)
     table_text: str | None = None  # paragraph style for text inside table cells
     threeline_table: str | None = None  # Word table style for a 三线表 (first cmd \toprule)
     body: str | None = None  # paragraph style for ordinary body-text (正文) paragraphs
@@ -446,6 +454,13 @@ def _resolve_role_styles(
     styles = _RoleStyles()
     meta = doc.meta
     overrides = getattr(meta, "style_overrides", None) or {}
+    from .backend.caption_config import caption_key_prefix
+
+    theorem_caption_roles = {
+        f"{caption_key_prefix(env)}caption": env.strip().lower()
+        for env in meta.custom_theorems
+        if caption_key_prefix(env)
+    }
     name_to_id = reference.style_name_to_id if reference else {}
     char_name_to_id = reference.char_style_name_to_id if reference else {}
     heading_rename = reference.heading_rename if reference else {}
@@ -476,7 +491,10 @@ def _resolve_role_styles(
             report.warn("reference-doc",
                         f"\\texwordstyle: style {name!r} for '{role}' not found in {where}")
             continue
-        _assign_role(styles, role, sid, book=doc.book)
+        if role in theorem_caption_roles:
+            styles.theorem_captions[theorem_caption_roles[role]] = sid
+        else:
+            _assign_role(styles, role, sid, book=doc.book)
         if role in ("abstract", "sourcecode"):
             canonical = _PARAGRAPH_STYLE_ROLES[role][0]
             if sid != canonical:

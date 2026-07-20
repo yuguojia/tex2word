@@ -251,7 +251,34 @@ The GUI depends on this package for the actual conversion, so everything in
   "Figure N").
 - **Theorem environments**: `theorem`/`lemma`/`proof`/`definition`/… render
   with a bold numbered lead (live `SEQ` per kind), optional `[title]`, and a
-  QED mark for proofs; `\ref` to a theorem shows its number.
+  QED mark for proofs; `\ref` to a theorem shows its number. Environments
+  declared with `\newtheorem` can customize their Word lead with
+  environment-prefixed `\texwordcaption` keys: `label`, `seq`, `labelsep`,
+  `titleopen`, `titleclose`, `delim`, and `labelstyle`/`identifierstyle`.
+  For example, the following emits **Note S1. Title.** with a live `SEQ Note`
+  field:
+
+  ```latex
+  \newtheorem{note}{Note}
+  \texwordcaption{notelabel}{Note S}
+  \texwordcaption{noteseq}{Note}
+  \texwordcaption{notelabelsep}{}
+  \texwordcaption{notetitleopen}{. }
+  \texwordcaption{notetitleclose}{}
+  \texwordcaption{notedelim}{. }
+  % Apply a reference-document paragraph style to the whole note lead paragraph
+  \texwordstyle{notecaption}{Note Caption}
+
+  \begin{note}[Title]
+  Body text.
+  \end{note}
+  ```
+
+  The named `Note Caption` must be a paragraph style in the reference `.docx`;
+  it applies to the entire paragraph containing `Note S1. Title. Body text.`,
+  just as `\texwordstyle{figurecaption}{...}` applies to a figure-caption
+  paragraph. To style only the generated `Note S1.` identifier, use the separate
+  character-style setting `\texwordcaption{notelabelstyle}{...}`.
 - **Algorithms**: `algorithm` + `algorithmic`/`algpseudocode`/`algorithm2e` →
   numbered, indented pseudocode with bold keywords, inline OMML math, and a live
   `SEQ Algorithm` caption.
