@@ -11,6 +11,8 @@ This is structural recovery, not byte-identical (an explicit PRD non-goal).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import re
@@ -543,23 +545,27 @@ class _Reader:
 
     def _inlines(self, parent: etree._Element) -> list[ir.Inline]:
         out: list[ir.Inline] = []
-        field = self._runs(parent, out, None)
+        fields = self._runs(parent, out, [])
         # A field that opened and reached its result but isn't closed in this
         # paragraph (e.g. the first entry of a multi-paragraph CSL_BIBLIOGRAPHY):
         # flush its visible result so the text isn't lost.
-        if field is not None and field.get("phase") == "result":
-            self._emit_field(field, out)
+        for field in reversed(fields):
+            if field.get("phase") == "result":
+                self._emit_field(field, out)
+                break
         return out
 
     def _runs(
-        self, parent: etree._Element, out: list[ir.Inline], field: dict | None
-    ) -> dict | None:
+        self, parent: etree._Element, out: list[ir.Inline], fields: list[dict]
+    ) -> list[dict]:
         """Walk run-level children, accepting tracked changes.
 
         ``w:ins``/``w:moveTo`` (insertions/move targets) are accepted -- their
         runs are kept; ``w:del``/``w:moveFrom`` (deletions/move sources) are
         accepted by being dropped. So a Word document reviewed with Track Changes
-        round-trips as if every change were accepted.
+        round-trips as if every change were accepted. ``fields`` is a stack:
+        EndNote commonly nests ``EN.CITE.DATA`` inside ``EN.CITE``, and a citation
+        can itself sit inside a ``HYPERLINK`` field.
         """
         for el in parent:
             tag = _local(el)
@@ -569,54 +575,78 @@ class _Reader:
                 self._deleted_comments(el, out)
                 continue
             if tag in ("ins", "moveTo"):  # accepted insertion -> keep its runs
-                field = self._runs(el, out, field)
+                fields = self._runs(el, out, fields)
             elif tag == "oMathPara":  # display equation sharing the paragraph
                 out.append(self._display_math(el))
             elif tag == "oMath":  # inline math
                 out.append(ir.Math(omath_to_latex(el)))
             elif tag == "hyperlink":
-                self._runs(el, out, None)  # rels not resolved; keep text
+                # Keep the field stack across the wrapper. EndNote citations may
+                # start/end inside w:hyperlink elements or span several of them.
+                fields = self._runs(el, out, fields)
             elif tag == "r":
-                field = self._run(el, out, field)
-        return field
+                fields = self._run(el, out, fields)
+        return fields
 
-    def _run(self, r: etree._Element, out: list[ir.Inline], field: dict | None) -> dict | None:
+    def _run(
+        self, r: etree._Element, out: list[ir.Inline], fields: list[dict]
+    ) -> list[dict]:
         # a comment anchor -> recover the reviewer's note (no visible text)
         cref = r.find(_w("commentReference"))
         if cref is not None:
             entry = self.comments.get(cref.get(_w("id")) or "")
             if entry is not None:
                 out.append(ir.Comment(text=entry[1], author=entry[0]))
-            return field
+            return fields
         # complex-field state machine
         fld = r.find(_w("fldChar"))
         if fld is not None:
             kind = fld.get(_w("fldCharType"))
             if kind == "begin":
-                return {"instr": "", "phase": "instr", "result": []}
-            if kind == "separate" and field is not None:
-                field["phase"] = "result"
-                return field
-            if kind == "end" and field is not None:
-                self._emit_field(field, out)
-                return None
-            return field
+                data = fld.find(_w("fldData"))
+                encoded = (data.text or "").strip() if data is not None else ""
+                fields.append({
+                    "instr": "", "phase": "instr", "result": [],
+                    "data": [encoded] if encoded else [], "inner_data": [],
+                    "contains_cite": False,
+                })
+                return fields
+            if kind == "separate" and fields:
+                fields[-1]["phase"] = "result"
+                return fields
+            if kind == "end" and fields:
+                field = fields.pop()
+                instr = field["instr"].strip()
+                if instr.startswith("ADDIN EN.CITE.DATA"):
+                    if fields:
+                        fields[-1]["inner_data"].extend(field.get("data", []))
+                else:
+                    self._emit_field(field, out)
+                    if instr.startswith("ADDIN EN.CITE"):
+                        for outer in fields:
+                            outer["contains_cite"] = True
+                return fields
+            return fields
         instr = r.find(_w("instrText"))
-        if instr is not None and field is not None:
-            field["instr"] += instr.text or ""
-            return field
+        if instr is not None and fields:
+            fields[-1]["instr"] += instr.text or ""
+            return fields
         draw = r.find(_w("drawing"))
-        if draw is not None and field is None:  # an inline image (icon/logo)
+        if draw is not None and not fields:  # an inline image (icon/logo)
             out.append(ir.Image(path=_drawing_descr(r)))
-            return field
+            return fields
         # an oMath nested in a run (rare) or text
         text = "".join(t.text or "" for t in r.findall(_w("t")))
-        if field is not None and field.get("phase") == "result":
-            field["result"].append(text)
-            return field
+        in_result = False
+        for field in fields:
+            if field.get("phase") == "result":
+                field["result"].append(text)
+                in_result = True
+        if in_result:
+            return fields
         if text:
             out.append(self._styled_text(r, text))
-        return field
+        return fields
 
     def _deleted_comments(self, parent: etree._Element, out: list[ir.Inline]) -> None:
         """Recover comment anchors inside accepted deletions without restoring
@@ -670,6 +700,10 @@ class _Reader:
     def _emit_field(self, field: dict, out: list[ir.Inline]) -> None:
         instr = field["instr"].strip()
         result = "".join(field["result"])
+        if instr.startswith("ADDIN EN.CITE.DATA"):
+            return  # metadata child of EN.CITE, never a citation by itself
+        if instr.startswith("HYPERLINK") and field.get("contains_cite"):
+            return  # the nested EN.CITE already emitted the semantic node
         m = re.match(r"REF\s+(\S+)", instr)
         if m:
             out.append(ir.Ref(self._resolve_label(m.group(1)), "generic"))
@@ -691,13 +725,26 @@ class _Reader:
             out.append(self._csl_cite(instr, result))
             return
         if "EN.CITE" in instr or "EN.REF" in instr:  # EndNote
-            out.append(self._endnote_cite(instr, result))
+            out.append(self._endnote_cite(self._endnote_source(field), result))
             return
         if instr.startswith("SEQ"):
             return  # a regenerated number; drop
         # Preserve every other complex field as a first-class custom field so a
         # foreign docx can round-trip PAGE/DATE/DOCPROPERTY/IF/etc. losslessly.
         out.append(ir.WordField(instr, result))
+
+    @staticmethod
+    def _endnote_source(field: dict) -> str:
+        """Return EndNote XML from outer fldData, then inner DATA, then instrText."""
+        for encoded in [*field.get("data", []), *field.get("inner_data", [])]:
+            try:
+                compact = "".join(encoded.split())
+                decoded = base64.b64decode(compact).decode("utf-8")
+            except (ValueError, UnicodeDecodeError, binascii.Error):
+                continue
+            if "<EndNote" in decoded:
+                return decoded
+        return field["instr"].strip()
 
     def _csl_cite(self, instr: str, result: str) -> ir.Cite:
         """A Zotero/Mendeley ``…CSL_CITATION {…}`` field → ``ir.Cite``."""
