@@ -111,9 +111,9 @@ def test_subfigures_render_side_by_side(tmp_path):
         "//wp:extent",
         namespaces={"wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"},
     )
-    from tex2word.backend.images import _MAX_WIDTH_EMU
+    from tex2word.backend.images import DEFAULT_TEXT_WIDTH_EMU
 
-    assert all(int(e.get("cx")) < _MAX_WIDTH_EMU for e in extents)
+    assert all(int(e.get("cx")) < DEFAULT_TEXT_WIDTH_EMU for e in extents)
 
 
 def test_subfigure_ref_emits_seq_figure_and_ref(tmp_path):

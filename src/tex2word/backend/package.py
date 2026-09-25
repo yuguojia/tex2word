@@ -25,6 +25,10 @@ _CONTENT_TYPES_HEAD = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Default Extension="png" ContentType="image/png"/>
   <Default Extension="jpeg" ContentType="image/jpeg"/>
   <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="bmp" ContentType="image/bmp"/>
+  <Default Extension="dib" ContentType="image/bmp"/>
+  <Default Extension="gif" ContentType="image/gif"/>
+  <Default Extension="webp" ContentType="image/webp"/>
   <Default Extension="emf" ContentType="image/x-emf"/>
   <Default Extension="tif" ContentType="image/tiff"/>
   <Default Extension="tiff" ContentType="image/tiff"/>

@@ -22,6 +22,7 @@ import tempfile
 # xelatex/lualatex first: they honour fontspec/xeCJK for CJK text in nodes.
 _ENGINES = ("xelatex", "lualatex", "pdflatex")
 _UNICODE_ENGINES = ("xelatex", "lualatex")
+DEFAULT_DPI = 220
 
 #: drawing environments we try to compile (mirror of the front-end's opaque set)
 DRAWING_ENVS = (
@@ -154,7 +155,7 @@ def available_engines() -> list[str]:
 
 
 def render(
-    source: str, preamble: str = "", *, dpi: int = 220, timeout: int = 60
+    source: str, preamble: str = "", *, dpi: int = DEFAULT_DPI, timeout: int = 60
 ) -> tuple[bytes, int, int] | None:
     """Compile the picture in ``source`` to a cropped PNG; ``None`` on any failure.
 

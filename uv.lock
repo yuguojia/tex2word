@@ -817,10 +817,11 @@ wheels = [
 
 [[package]]
 name = "tex2word"
-version = "1.0.5"
+version = "1.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "lxml" },
+    { name = "pillow" },
     { name = "pylatexenc" },
 ]
 
@@ -835,7 +836,6 @@ mathml = [
     { name = "latex2mathml" },
 ]
 pdf = [
-    { name = "pillow" },
     { name = "pypdfium2" },
 ]
 
@@ -857,7 +857,7 @@ requires-dist = [
     { name = "latex2mathml", marker = "extra == 'mathml'", specifier = ">=3.77" },
     { name = "lxml", specifier = ">=5.0" },
     { name = "matplotlib", marker = "extra == 'mathimg'", specifier = ">=3.7" },
-    { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10" },
+    { name = "pillow", specifier = ">=10" },
     { name = "pylatexenc", specifier = ">=2.10" },
     { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=4" },
 ]

@@ -83,6 +83,11 @@ those documents surfaced.
 
 ## Unreleased
 
+- **Raster image DPI and unrestricted natural width.** PNG, JPEG, BMP, TIFF,
+  GIF, and WebP figures now use embedded horizontal/vertical DPI metadata for
+  their Word size (96 dpi only when metadata is absent). Ordinary figures are
+  no longer capped at six inches; WebP and BMP are embedded directly with their
+  OOXML content types.
 - **Per-environment theorem lead formatting.** Custom environments declared by
   `\newtheorem` can now use environment-prefixed `\texwordcaption` keys such as
   `notelabel`, `noteseq`, `notelabelsep`, `notetitleopen`, `notetitleclose`,

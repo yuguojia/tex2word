@@ -29,6 +29,7 @@ def convert_source(
     base_dir: str = ".",
     *,
     embed_manifest: bool = True,
+    content_controls: bool = True,
     number_by_section: bool = False,
     citation_mode: str = "static",
     columns: int = 1,
@@ -44,6 +45,8 @@ def convert_source(
 
     When ``embed_manifest`` is set (default), the IR is persisted as a custom
     part inside the ``.docx`` to support round-tripping. With
+    ``content_controls=False``, figures and the bibliography are written directly
+    into the document body instead of tagged Word content controls. With
     ``number_by_section`` figures/tables/equations are numbered ``N.M`` per
     section instead of with a flat counter. ``citation_mode`` is ``"static"``
     (formatted text), ``"zotero"`` (live ``CSL_CITATION`` fields), or
@@ -143,6 +146,7 @@ def convert_source(
         image_math_renderer=image_renderer,
         number_by_section=number_by_section,
         citation_mode=citation_mode,
+        content_controls=content_controls,
         columns=effective_columns,
         page_pgsz=reference.page_pgsz if reference else None,
         page_pgmar=reference.page_pgmar if reference else None,
@@ -582,6 +586,7 @@ def convert_file(
     output_path: str | None = None,
     *,
     embed_manifest: bool = True,
+    content_controls: bool = True,
     number_by_section: bool = False,
     citation_mode: str = "static",
     columns: int = 1,
@@ -599,6 +604,7 @@ def convert_file(
     base_dir = os.path.dirname(os.path.abspath(input_path))
     result = convert_source(
         source, base_dir, embed_manifest=embed_manifest,
+        content_controls=content_controls,
         number_by_section=number_by_section, citation_mode=citation_mode,
         columns=columns, frontend=frontend, math_image_fallback=math_image_fallback,
         csl=csl, reference_doc=reference_doc, language=language,

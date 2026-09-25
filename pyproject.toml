@@ -39,6 +39,7 @@ classifiers = [
 ]
 dependencies = [
     "lxml>=5.0",
+    "pillow>=10",
     "pylatexenc>=2.10",
 ]
 
@@ -50,8 +51,8 @@ Changelog = "https://github.com/yfyang86/tex2word/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # Rasterise PDF figures to embeddable PNG (Word can't embed PDF directly).
-# pypdfium2 (PDFium) + Pillow are both permissive (Apache-2.0/BSD/HPND) -- no GPL.
-pdf = ["pypdfium2>=4", "pillow>=10"]
+# pypdfium2 (PDFium) and the core Pillow dependency are permissive -- no GPL.
+pdf = ["pypdfium2>=4"]
 # Secondary math path: LaTeX -> presentation MathML -> OMML for the hard 20%.
 mathml = ["latex2mathml>=3.77"]
 # Image fallback for math that can't become OMML (pure-Python; no TeX needed).

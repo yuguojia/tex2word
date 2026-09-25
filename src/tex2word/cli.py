@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
         help="do not embed the round-trip IR manifest in the .docx",
     )
     conv.add_argument(
+        "--no-content-controls",
+        action="store_true",
+        help="write figures and bibliography directly, without Word content controls",
+    )
+    conv.add_argument(
         "--number-by-section",
         action="store_true",
         help="number figures/tables/equations as N.M per section (book/report style)",
@@ -251,6 +256,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
             args.input,
             args.output,
             embed_manifest=not args.no_manifest,
+            content_controls=not args.no_content_controls,
             number_by_section=args.number_by_section,
             citation_mode=args.citations,
             columns=args.columns,

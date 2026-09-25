@@ -37,6 +37,7 @@ tex2word convert paper.tex -o paper.docx
 tex2word convert paper.tex -o paper.docx --report report.json
 tex2word convert paper.tex -o paper.docx --reference-doc journal.docx
 tex2word convert paper.tex -o paper.docx --plugin examples/supp_plugin.py
+tex2word convert paper.tex -o paper.docx --no-content-controls
 ```
 
 Or, for a development checkout with [uv](https://docs.astral.sh/uv/):
@@ -56,6 +57,11 @@ print(result.report.summary())   # math coverage + warnings
 
 result = convert_source(source, plugins=["examples/supp_plugin.py"])
 ```
+
+`--no-content-controls` writes figures and the bibliography directly into the
+Word body, without tagged content controls. The Python equivalent is
+`content_controls=False`. The default keeps the tags for more faithful
+DOCX-to-LaTeX recovery when the embedded manifest is unavailable.
 
 ### Python plugins
 

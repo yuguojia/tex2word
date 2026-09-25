@@ -55,6 +55,7 @@ class DocumentWriter:
         image_math_renderer: ImageMathRenderer | None = None,
         number_by_section: bool = False,
         citation_mode: str = "static",
+        content_controls: bool = True,
         columns: int = 1,
         page_pgsz: dict[str, str] | None = None,
         page_pgmar: dict[str, str] | None = None,
@@ -134,6 +135,7 @@ class DocumentWriter:
         #: (full-width quote); LaTeX-command quotes keep the default (Latin) font.
         self.cjk_quote_hint = cjk_quote_hint
         self.citation_mode = citation_mode
+        self.content_controls = content_controls
         self.columns = max(columns, 1)
         #: In \texwordtemplate[style-numbering] mode the reference template's
         #: paragraph styles carry numbering, so generated body paragraphs should
@@ -685,12 +687,9 @@ class DocumentWriter:
         tc.append(self._styled_paragraph(self._table_text_style))
 
     def _figure(self, block: ir.Figure, body: _Element) -> None:
-        # wrap in a tagged block SDT so the round-trip reader recovers one
-        # ir.Figure even when sub-figures render as a table grid (else they read
-        # back as a Table + paragraphs).
-        sdt = el("w:sdt")
-        sub(sub(sdt, "w:sdtPr"), "w:tag", **{"w:val": FIG_SDT_TAG})
-        content = sub(sdt, "w:sdtContent")
+        # A tagged SDT lets the round-trip reader recover sub-figure grids as
+        # one Figure; the direct-output mode leaves the same blocks in the body.
+        content = self._block_content(body, FIG_SDT_TAG)
         cap = None
         if block.caption is not None:
             bookmark = _figure_bookmark(block)
@@ -711,7 +710,16 @@ class DocumentWriter:
             content.append(self._image_paragraph(block.image))
         if cap is not None and not block.caption_above:
             content.append(cap)
+
+    def _block_content(self, body: _Element, tag: str) -> _Element:
+        """Return the destination for a semantic block, optionally inside an SDT."""
+        if not self.content_controls:
+            return body
+        sdt = el("w:sdt")
+        sub(sub(sdt, "w:sdtPr"), "w:tag", **{"w:val": tag})
+        content = sub(sdt, "w:sdtContent")
         body.append(sdt)
+        return content
 
     def _float(self, block: ir.Float, body: _Element) -> None:
         cap = None
@@ -756,7 +764,11 @@ class DocumentWriter:
         p = self._styled_paragraph(self._figure_style)
         self._set_align(p, "center")
         r = el("w:r")
-        r.append(self._register_and_draw(data, images.ImageInfo("png", w, h), "tikz.png"))
+        r.append(self._register_and_draw(
+            data,
+            images.ImageInfo("png", w, h, tikz.DEFAULT_DPI, tikz.DEFAULT_DPI),
+            "tikz.png",
+        ))
         p.append(r)
         return p
 
@@ -765,7 +777,7 @@ class DocumentWriter:
         # holds the (width-scaled) image and its "(a)" sub-caption.
         subs = block.subfigures
         ncols = max(len(subs), 1)
-        col_emu = int(images._MAX_WIDTH_EMU / ncols) - 90000  # small inter-cell gap
+        col_emu = int(images.DEFAULT_TEXT_WIDTH_EMU / ncols) - 90000  # small inter-cell gap
         tbl = el("w:tbl")
         tpr = sub(tbl, "w:tblPr")
         sub(tpr, "w:tblW", **{"w:w": "0", "w:type": "auto"})
@@ -838,7 +850,11 @@ class DocumentWriter:
                 data, w, h = result
                 self.report.info("includegraphics", f"rasterised {fmt} -> png: {image.path}")
                 return self._register_and_draw(
-                    data, images.ImageInfo("png", w, h), name, max_width_emu, image
+                    data,
+                    images.ImageInfo(
+                        "png", w, h, raster.DEFAULT_DPI, raster.DEFAULT_DPI
+                    ),
+                    name, max_width_emu, image,
                 )
             hint = (
                 "install tex2word[pdf]" if fmt == "pdf" and not raster.has_pdf_support()
@@ -859,7 +875,10 @@ class DocumentWriter:
         # graphicx resolves a missing extension against known formats.
         base = os.path.splitext(path)[0]
         for candidate in (path, base):
-            for ext in (".pdf", ".png", ".jpg", ".jpeg", ".eps", ".ps"):
+            for ext in (
+                ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".dib", ".gif",
+                ".tif", ".tiff", ".webp", ".svg", ".eps", ".ps",
+            ):
                 if os.path.isfile(candidate + ext):
                     return candidate + ext
         return None
@@ -907,8 +926,7 @@ class DocumentWriter:
         info: images.ImageInfo, image: ir.Image | None, max_width_emu: int | None
     ) -> tuple[int, int]:
         """Final (cx, cy) in EMU, honouring width/height/scale then fitting width."""
-        nat_cx = info.width_px * images.EMU_PER_PX
-        nat_cy = info.height_px * images.EMU_PER_PX
+        nat_cx, nat_cy = images.natural_emu_size(info)
         w = image.width if image else None
         h = image.height if image else None
         scale = image.scale if image else None
@@ -922,10 +940,9 @@ class DocumentWriter:
             cx, cy = nat_cx * scale, nat_cy * scale
         else:
             return images.emu_size(info, max_width_emu)
-        limit = max_width_emu if max_width_emu is not None else images._MAX_WIDTH_EMU
-        if cx > limit:
-            cy *= limit / cx
-            cx = limit
+        if max_width_emu is not None and cx > max_width_emu:
+            cy *= max_width_emu / cx
+            cx = max_width_emu
         return int(cx), int(cy)
 
     @staticmethod
@@ -941,8 +958,9 @@ class DocumentWriter:
         # trim alone shifts the box. srcRect always crops, so gate it on clip.
         if not image or not image.trim or not image.clip:
             return None
-        nat_cx = info.width_px * images.EMU_PER_PX or 1
-        nat_cy = info.height_px * images.EMU_PER_PX or 1
+        nat_cx, nat_cy = images.natural_emu_size(info)
+        nat_cx = nat_cx or 1
+        nat_cy = nat_cy or 1
         left, bottom, right, top = image.trim  # graphicx order: l b r t
         # a:srcRect insets are in 1000ths of a percent of the natural dimension.
         return {
@@ -1059,12 +1077,8 @@ class DocumentWriter:
 
         if not block.entries:
             return
-        # wrap the whole reference list in a tagged block SDT so the round-trip
-        # reader recovers it as one ir.Bibliography (not heading + paragraphs).
-        sdt = el("w:sdt")
-        sdtpr = sub(sdt, "w:sdtPr")
-        sub(sdtpr, "w:tag", **{"w:val": BIB_SDT_TAG})
-        content = sub(sdt, "w:sdtContent")
+        # The tag lets the round-trip reader recover a single Bibliography.
+        content = self._block_content(body, BIB_SDT_TAG)
         level = min(max(block.heading_level, 1), 5)
         heading_style = _HEADING_STYLE.get(level, "Heading5")
         if not block.heading_numbered:
@@ -1109,7 +1123,6 @@ class DocumentWriter:
             closer = self._styled_paragraph("Bibliography")
             closer.append(bibliography_field_end())
             content.append(closer)
-        body.append(sdt)
 
     def _code_block(self, block: ir.CodeBlock, body: _Element) -> None:
         for line in block.text.split("\n"):

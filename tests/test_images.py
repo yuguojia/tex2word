@@ -5,8 +5,10 @@ import struct
 import zipfile
 import zlib
 
+import pytest
 from conftest import NS
 from lxml import etree
+from PIL import Image
 
 from tex2word import convert_file, convert_source, ir
 from tex2word.backend import images
@@ -98,12 +100,19 @@ def test_probe_missing_file():
     assert images.probe("/nonexistent/x.png") is None
 
 
-def test_emu_scales_down_wide_image():
+def test_emu_does_not_clamp_wide_image():
     info = images.ImageInfo("png", 4000, 2000)
     cx, cy = images.emu_size(info)
-    max_w = int(6.0 * images.EMU_PER_INCH)
-    assert cx == max_w  # clamped to text width
+    assert cx == 4000 * images.EMU_PER_PX
     assert abs(cy / cx - 2000 / 4000) < 0.01  # aspect ratio preserved
+
+
+def test_emu_honours_explicit_container_limit():
+    info = images.ImageInfo("png", 4000, 2000)
+    max_w = int(3.0 * images.EMU_PER_INCH)
+    cx, cy = images.emu_size(info, max_w)
+    assert cx == max_w
+    assert cy == max_w // 2
 
 
 def test_emu_keeps_small_image_unscaled():
@@ -111,6 +120,32 @@ def test_emu_keeps_small_image_unscaled():
     cx, cy = images.emu_size(info)
     assert cx == 96 * images.EMU_PER_PX
     assert cy == 48 * images.EMU_PER_PX
+
+
+@pytest.mark.parametrize(
+    ("fmt", "ext"),
+    [("PNG", "png"), ("JPEG", "jpg"), ("BMP", "bmp"), ("TIFF", "tif"),
+     ("WEBP", "webp")],
+)
+def test_raster_metadata_dpi_controls_physical_size(tmp_path, fmt, ext):
+    path = tmp_path / f"dpi.{ext}"
+    image = Image.new("RGB", (1200, 600), "red")
+    if fmt == "WEBP":
+        exif = Image.Exif()
+        exif[282] = 300  # XResolution
+        exif[283] = 150  # YResolution
+        exif[296] = 2    # inches
+        image.save(path, format=fmt, exif=exif)
+    else:
+        image.save(path, format=fmt, dpi=(300, 150))
+
+    info = images.probe(str(path))
+    assert info is not None
+    assert info.dpi_x == pytest.approx(300, rel=1e-3)
+    assert info.dpi_y == pytest.approx(150, rel=1e-3)
+    cx, cy = images.emu_size(info)
+    assert cx == pytest.approx(4 * images.EMU_PER_INCH, rel=1e-3)
+    assert cy == pytest.approx(4 * images.EMU_PER_INCH, rel=1e-3)
 
 
 def test_figure_embeds_image(tmp_path):
@@ -209,6 +244,74 @@ def test_width_option_sets_extent(tmp_path):
     ext = root.xpath("//wp:extent", namespaces=_A_NS)[0]
     assert ext.get("cx") == str(2 * 914400)           # 2 inch
     assert ext.get("cy") == str(914400)               # aspect-preserved (50/100)
+
+
+def test_width_option_is_not_clamped_to_six_inches(tmp_path):
+    res = _convert(tmp_path, r"\includegraphics[width=8in]{pic.png}")
+    root = etree.fromstring(zipfile.ZipFile(io.BytesIO(res.docx)).read("word/document.xml"))
+    ext = root.xpath("//wp:extent", namespaces=_A_NS)[0]
+    assert ext.get("cx") == str(8 * images.EMU_PER_INCH)
+
+
+def test_webp_embeds_directly_with_dpi_size(tmp_path):
+    path = tmp_path / "pic.webp"
+    exif = Image.Exif()
+    exif[282] = 300
+    exif[283] = 300
+    exif[296] = 2
+    Image.new("RGB", (1200, 600), "blue").save(path, format="WEBP", exif=exif)
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"\begin{document}\includegraphics{pic.webp}\end{document}", encoding="utf-8"
+    )
+
+    _, result = convert_file(str(tex))
+    zf = zipfile.ZipFile(io.BytesIO(result.docx))
+    assert "word/media/image1.webp" in zf.namelist()
+    assert 'Extension="webp" ContentType="image/webp"' in (
+        zf.read("[Content_Types].xml").decode()
+    )
+    root = etree.fromstring(zf.read("word/document.xml"))
+    extent = root.xpath("//wp:extent", namespaces=_A_NS)[0]
+    assert extent.get("cx") == str(4 * images.EMU_PER_INCH)
+    assert extent.get("cy") == str(2 * images.EMU_PER_INCH)
+
+
+def test_bmp_embeds_directly(tmp_path):
+    Image.new("RGB", (300, 150), "green").save(
+        tmp_path / "pic.bmp", format="BMP", dpi=(150, 150)
+    )
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"\begin{document}\includegraphics{pic.bmp}\end{document}", encoding="utf-8"
+    )
+
+    _, result = convert_file(str(tex))
+    zf = zipfile.ZipFile(io.BytesIO(result.docx))
+    assert "word/media/image1.bmp" in zf.namelist()
+    assert 'Extension="bmp" ContentType="image/bmp"' in (
+        zf.read("[Content_Types].xml").decode()
+    )
+    root = etree.fromstring(zf.read("word/document.xml"))
+    extent = root.xpath("//wp:extent", namespaces=_A_NS)[0]
+    assert int(extent.get("cx")) == pytest.approx(2 * images.EMU_PER_INCH, rel=1e-3)
+
+
+def test_default_dpi_size_over_six_inches_is_not_clamped(tmp_path):
+    Image.new("RGB", (2400, 1200), "purple").save(
+        tmp_path / "wide.png", format="PNG", dpi=(300, 300)
+    )
+    tex = tmp_path / "main.tex"
+    tex.write_text(
+        r"\begin{document}\includegraphics{wide.png}\end{document}", encoding="utf-8"
+    )
+
+    _, result = convert_file(str(tex))
+    root = etree.fromstring(
+        zipfile.ZipFile(io.BytesIO(result.docx)).read("word/document.xml")
+    )
+    extent = root.xpath("//wp:extent", namespaces=_A_NS)[0]
+    assert int(extent.get("cx")) == pytest.approx(8 * images.EMU_PER_INCH, rel=1e-3)
 
 
 def test_scale_option(tmp_path):
