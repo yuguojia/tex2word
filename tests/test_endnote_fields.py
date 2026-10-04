@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from conftest import NS, document_root
 
-from tex2word import convert_file, ir
+from tex2word import convert_file, convert_source, ir
 from tex2word.frontend.docx_reader import read_docx
 
 BIB = r"""
@@ -180,3 +182,51 @@ def test_endnote_reader_without_label_uses_rn_prefix():
     cite = reader._endnote_cite(instr, "(Cho 2015)")
     assert cite.keys == ["RN100"]
     assert cite.rendered == "(Cho 2015)"
+
+
+def test_endnote_csl_json_rich_text_becomes_endnote_styles_and_word_runs(tmp_path):
+    title = (
+        "Mimicking neurotransmitter release in chemical synapses <i>via</i> "
+        "hysteresis engineering in MoS<sub>2</sub> transistors"
+    )
+    items = [{
+        "id": "rich2026",
+        "type": "article-journal",
+        "title": title,
+        "author": [{"family": "Author", "given": "Ada"}],
+        "issued": {"date-parts": [[2026]]},
+    }]
+    (tmp_path / "refs.json").write_text(json.dumps(items), encoding="utf-8")
+    source = (
+        r"\documentclass{article}\addbibresource{refs.json}"
+        r"\begin{document}\cite{rich2026}\printbibliography\end{document}"
+    )
+
+    result = convert_source(
+        source,
+        base_dir=str(tmp_path),
+        citation_mode="endnote",
+        embed_manifest=False,
+    )
+    instr = _endnote_instrs(result.docx)[0]
+    assert (
+        '<title><style face="normal">Mimicking neurotransmitter release in chemical '
+        'synapses </style><style face="italic">via</style><style face="normal"> '
+        'hysteresis engineering in MoS</style><style face="subscript">2</style>'
+        '<style face="normal"> transistors</style></title>'
+    ) in instr
+    assert "&lt;i&gt;" not in instr and "&lt;sub&gt;" not in instr
+
+    root = document_root(result.docx)
+    visible = "".join(root.xpath("//w:t/text()", namespaces=NS))
+    assert "<i>" not in visible and "<sub>" not in visible
+
+    via_run = root.xpath('//w:r[w:t="via"]', namespaces=NS)
+    assert len(via_run) == 1
+    assert via_run[0].xpath("./w:rPr/w:i", namespaces=NS)
+
+    subscript_run = root.xpath('//w:r[w:t="2"]', namespaces=NS)
+    assert len(subscript_run) == 1
+    valign = subscript_run[0].xpath("./w:rPr/w:vertAlign", namespaces=NS)
+    assert len(valign) == 1
+    assert valign[0].get(f"{{{NS['w']}}}val") == "subscript"

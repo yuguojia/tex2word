@@ -1074,6 +1074,7 @@ class DocumentWriter:
 
     def _bibliography(self, block: ir.Bibliography, body: _Element) -> None:
         from ..bib.render import format_reference
+        from ..bib.rich_text import parse_rich_text
 
         if not block.entries:
             return
@@ -1111,7 +1112,16 @@ class DocumentWriter:
                     p.append(run)
             if block.style == "numeric":
                 p.append(self._run(f"[{i}]\t"))
-            p.append(self._run(format_reference(item)))
+            for span in parse_rich_text(format_reference(item)):
+                faces = set(span.faces)
+                p.append(self._run(
+                    span.text,
+                    bold="bold" in faces,
+                    italic="italic" in faces,
+                    underline="underline" in faces,
+                    superscript="superscript" in faces,
+                    subscript="subscript" in faces,
+                ))
             p.append(fields.bookmark_end_for(start))
             content.append(p)
         if (zotero or endnote) and block.entries:

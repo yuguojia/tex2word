@@ -41,6 +41,17 @@ diagrams, `tabularx`/`longtable` tables, and `\newmdenv` callout boxes).
 
 ### Added
 
+- **CSL rich text in EndNote records and reference lists.** CSL JSON markup
+  (`<i>`/`<em>`, `<b>`/`<strong>`, `<sup>`, `<sub>`, and underline spans) is
+  converted to EndNote XML `<style face="…">` nodes instead of being escaped as
+  literal text. The cached Word reference list uses matching formatted runs, so
+  the document is correct before the first EndNote refresh as well.
+- **Broader CSL JSON to EndNote XML mappings.** EndNote fields now use a wider
+  set of CSL reference types, type-sensitive title/number/authority fields, and
+  contributor roles such as collection editors, translators, composers,
+  performers, directors, producers, interviewers, recipients, chairs and hosts.
+  Language tags continue to pass through unchanged, including BCP 47 values
+  such as `zh-Hant-TW`.
 - **`\newmdenv` callout boxes.** User-defined mdframed environments
   (`\newmdenv[backgroundcolor=…,linecolor=…]{name}`) now render as coloured
   callout boxes — a bordered, shaded single-cell frame using the box's own
