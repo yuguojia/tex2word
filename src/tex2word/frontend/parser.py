@@ -3383,6 +3383,7 @@ def _resolve_bibliography(
     csl_path: str | None = None,
 ) -> None:
     from ..bib.bibtex import parse_bibtex
+    from ..bib.csl_json import parse_csl_json
     from ..bib.render import resolve_citations
 
     style = builder.bib_style
@@ -3402,12 +3403,14 @@ def _resolve_bibliography(
 
     items: dict[str, ir.CSLItem] = {}
     for name in builder.bib_files:
-        candidates = [name, name + ".bib"] if not name.endswith(".bib") else [name]
+        suffix = os.path.splitext(name)[1].lower()
+        candidates = [name] if suffix in (".bib", ".json") else [name, name + ".bib"]
         for cand in candidates:
             path = os.path.join(base_dir, cand)
             if os.path.isfile(path):
                 with open(path, encoding="utf-8") as fh:
-                    items.update(parse_bibtex(fh.read()))
+                    parse = parse_csl_json if cand.lower().endswith(".json") else parse_bibtex
+                    items.update(parse(fh.read()))
                 break
         else:
             report.warn("\\bibliography", f"bibliography file not found: {name}")

@@ -7,6 +7,7 @@ V1 ships the static-text mode (numeric / author-year). The PRD's live
 from __future__ import annotations
 
 from .bibtex import parse_bibtex
+from .csl_json import parse_csl_json
 from .render import Bibliography, build_bibliography
 
-__all__ = ["Bibliography", "build_bibliography", "parse_bibtex"]
+__all__ = ["Bibliography", "build_bibliography", "parse_bibtex", "parse_csl_json"]
